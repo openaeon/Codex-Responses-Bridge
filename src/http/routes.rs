@@ -147,7 +147,9 @@ fn parse_market_overview_params(payload: &Value) -> Result<MarketOverviewParams,
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .unwrap_or("http://47.238.165.205:8009/overview")
+        .map(ToOwned::to_owned)
+        .or_else(|| std::env::var("ADAPTER_MARKET_OVERVIEW_BASE_URL").ok())
+        .unwrap_or_else(|| "http://127.0.0.1:8009/overview".to_string())
         .to_string();
 
     Ok(MarketOverviewParams {

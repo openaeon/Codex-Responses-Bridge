@@ -168,7 +168,7 @@ pub const INDEX_HTML: &str = r#"<!doctype html>
         },
         "base_url": {
           "type": "string",
-          "default": "http://47.238.165.205:8009/overview"
+          "default": "http://127.0.0.1:8009/overview"
         }
       },
       "required": ["symbol"]
