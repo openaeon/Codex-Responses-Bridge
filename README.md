@@ -1,5 +1,7 @@
 # model-toolcall-adapter-rs
 
+[English](README.md) | [简体中文](README.zh-CN.md)
+
 > A standalone Rust adapter that lets text-only models work with Codex-style, OpenAI-compatible, and Anthropic-style coding clients.
 
 `model-toolcall-adapter-rs` exposes OpenAI-compatible and Anthropic-style HTTP endpoints, converts standard tool definitions into a stable text protocol, sends that prompt to an upstream model, then parses the model's textual tool intent back into standard tool-call responses.
