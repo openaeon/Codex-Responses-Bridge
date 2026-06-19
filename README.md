@@ -1,10 +1,12 @@
 # model-toolcall-adapter-rs
 
-> A standalone Rust adapter that teaches text-only models how to speak modern tool-calling APIs.
+> A standalone Rust adapter that lets text-only models work with Codex-style, OpenAI-compatible, and Anthropic-style coding clients.
 
 `model-toolcall-adapter-rs` exposes OpenAI-compatible and Anthropic-style HTTP endpoints, converts standard tool definitions into a stable text protocol, sends that prompt to an upstream model, then parses the model's textual tool intent back into standard tool-call responses.
 
-It is designed for models and providers that are useful at reasoning but do not reliably support native function calling.
+It is designed for models and providers that are useful at coding and reasoning but do not reliably support native function calling.
+
+The goal is practical compatibility with mainstream programming agents and editor tools: Codex-style clients that expect OpenAI Responses, Claude/Anthropic-style clients that speak Messages-shaped payloads, and developer tools that can point at an OpenAI-compatible `base_url`.
 
 ## What It Does
 
@@ -19,13 +21,29 @@ It is designed for models and providers that are useful at reasoning but do not 
 
 The project is now standalone. It does not depend on `../crates/aeon-claw-api`, `aeon-claw-cli`, or the FCACoreai workspace at build time or runtime.
 
+## Compatibility Targets
+
+The adapter is protocol-oriented. It does not require a tool or editor to know about this project specifically; it only needs to speak one of the supported HTTP formats.
+
+| Client family | Expected interface | Adapter endpoint |
+| --- | --- | --- |
+| Codex-style coding agents | OpenAI Responses-style API | `/v1/responses` |
+| OpenAI-compatible coding tools | Chat Completions API | `/v1/chat/completions` |
+| Anthropic/Claude-style clients | Messages-shaped payloads | `/v1/messages` |
+| Editor and terminal agents with custom base URL support | OpenAI-compatible `base_url` | `http://127.0.0.1:8787/v1` |
+| Local model stacks | Ollama, vLLM, LM Studio, llama.cpp-style OpenAI APIs | upstream `ADAPTER_UPSTREAM_BASE_URL` |
+
+This makes it suitable as a bridge for coding environments such as Codex-compatible CLIs, Claude/Anthropic-style agent runtimes, Cursor/Continue-like editor integrations, Aider/OpenCode-style terminal agents, and custom internal agent platforms. Compatibility depends on the client allowing a custom base URL and on which wire format it uses.
+
+The adapter is not an official OpenAI, Anthropic, Cursor, Continue, Aider, Cline, or OpenCode integration. It is a local protocol bridge that helps those classes of tools talk to upstream models that otherwise only return plain text.
+
 ## Architecture
 
 ```text
-Client / Agent Runtime
+Coding Client / Agent Runtime
         |
+        | Codex-style Responses
         | OpenAI Chat Completions
-        | OpenAI Responses
         | Anthropic-style Messages
         v
 model-toolcall-adapter-rs
