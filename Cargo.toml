@@ -9,7 +9,6 @@ publish = false
 
 [dependencies]
 anyhow = "1"
-aeon-claw-api = { path = "../crates/aeon-claw-api" }
 async-trait = "0.1"
 axum = "0.7"
 base64 = "0.22"
@@ -24,8 +23,6 @@ tower-http = { version = "0.5", features = ["trace", "cors"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 uuid = { version = "1", features = ["v4"] }
-wreq = "=6.0.0-rc.28"
-wreq-util = "=3.0.0-rc.10"
 
 [dev-dependencies]
 pretty_assertions = "1"

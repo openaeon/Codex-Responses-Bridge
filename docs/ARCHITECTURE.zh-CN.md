@@ -46,7 +46,7 @@
 
 ## 不推荐方案：
 
-- 不建议直接把 DeepSeek Web provider 从 FCACoreai 整个复制出来，里面混有桌面端、OCR、PoW、会话缓存和 runtime 类型。
+- 不建议依赖 FCACoreai 的 DeepSeek Web provider；本项目只保留当前 adapter 需要的登录入口、session 读取、PoW、completion 和 SSE 解析。
 - 不建议第一版就做工具执行器，否则 adapter 会变成 agent runtime，边界变重。
 - 不建议第一版就做 streaming，工具参数跨 chunk 拼接、半截 XML、Responses SSE 事件都需要单独状态机。
 
@@ -91,6 +91,7 @@ model-toolcall-adapter-rs/
 用户打开 /ui
 → 输入 Adapter API 与 Adapter API Key
 → 输入外部模型 API Base URL 与 API Key
+→ DeepSeek Web 模式下粘贴 Session JSON/Cookie，保存到 ~/.model-toolcall-adapter/deepseek_session.json
 → 点击登录并获取模型
 → 前端调用 GET /v1/models
 → 选择模型

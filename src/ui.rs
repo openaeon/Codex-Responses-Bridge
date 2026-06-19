@@ -136,7 +136,7 @@ pub const INDEX_HTML: &str = r#"<!doctype html>
       <label>外部模型 API Key</label>
       <input id="upstreamKey" type="password" placeholder="上游模型服务 key，可为空" />
       <label>DeepSeek Web Session JSON / Cookie</label>
-      <textarea id="deepseekSession" placeholder="可留空，后端会尝试读取 ~/.FCACore/deepseek_session.json；如果提示 invalid token，请重新登录 DeepSeek Web 后刷新该文件"></textarea>
+      <textarea id="deepseekSession" placeholder="可留空，后端会尝试读取 ~/.model-toolcall-adapter/deepseek_session.json；如果提示 invalid token，请重新登录 DeepSeek Web 后粘贴并保存新的 Session"></textarea>
       <div class="row" style="margin-top:10px">
         <button id="loginBtn">登录并获取模型</button>
         <button id="deepseekLoginBtn" class="secondary">刷新 DeepSeek 登录</button>
@@ -244,6 +244,15 @@ pub const INDEX_HTML: &str = r#"<!doctype html>
       sessionStorage.setItem("deepseekSession", $("deepseekSession").value);
       setStatus("loginStatus", "正在获取模型...");
       try {
+        if ($("providerSelect").value === "deepseek-web" && $("deepseekSession").value.trim()) {
+          const saveRes = await fetch(adapterUrl("/deepseek-web/session"), {
+            method: "POST",
+            headers: headers(),
+            body: JSON.stringify({ session: $("deepseekSession").value.trim() })
+          });
+          const saveBody = await saveRes.json();
+          if (!saveRes.ok) throw new Error(saveBody?.error?.message || saveRes.statusText);
+        }
         const res = await fetch(adapterUrl("/v1/models"), { headers: headers() });
         const body = await res.json();
         if (!res.ok) throw new Error(body?.error?.message || res.statusText);
@@ -273,7 +282,7 @@ pub const INDEX_HTML: &str = r#"<!doctype html>
         if (!res.ok) throw new Error(body?.error?.message || res.statusText);
         $("deepseekSession").value = "";
         sessionStorage.removeItem("deepseekSession");
-        setStatus("loginStatus", `FCACoreai Rust 登录已启动，完成登录后点“登录并获取模型”：${body.session_file || ""}`, "ok");
+        setStatus("loginStatus", `DeepSeek 登录页已打开。登录后粘贴 Session 并点“登录并获取模型”：${body.session_file || ""}`, "ok");
       } catch (err) {
         setStatus("loginStatus", err.message || String(err), "bad");
       } finally {

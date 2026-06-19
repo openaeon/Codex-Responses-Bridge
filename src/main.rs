@@ -1,4 +1,5 @@
 mod config;
+mod deepseek_web;
 mod error;
 mod http;
 mod protocol;

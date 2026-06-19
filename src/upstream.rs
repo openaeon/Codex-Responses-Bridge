@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use reqwest::Client;
@@ -223,29 +224,10 @@ impl OpenAiChatUpstream {
         prompt: &str,
         options: &UpstreamRequestOptions,
     ) -> Result<UpstreamResponse, AdapterError> {
-        use aeon_claw_api::{
-            AnthropicClient, AuthSource, InputContentBlock, InputMessage, MessageRequest,
-        };
-
         let session = raw_deepseek_session_from_options(options)?;
-        let client = AnthropicClient::from_auth(AuthSource::ApiKey(session))
-            .with_base_url("https://chat.deepseek.com".to_string())
-            .with_provider_hint(Some("deepseek_web".to_string()));
+        let client = crate::deepseek_web::DeepSeekWebClient::new(session);
         let response = client
-            .send_message(&MessageRequest {
-                model: request.model.clone(),
-                max_tokens: request.max_tokens,
-                messages: vec![InputMessage {
-                    role: "user".to_string(),
-                    content: vec![InputContentBlock::Text {
-                        text: prompt.to_string(),
-                    }],
-                }],
-                system: None,
-                tools: None,
-                tool_choice: None,
-                stream: false,
-            })
+            .complete(&request.model, prompt)
             .await
             .map_err(|error| {
                 let text = error.to_string();
@@ -256,26 +238,20 @@ impl OpenAiChatUpstream {
                 }
             })?;
 
-        let mut output = String::new();
-        let mut reasoning = String::new();
-        for block in response.content {
-            match block {
-                aeon_claw_api::OutputContentBlock::Text { text } => {
-                    output.push_str(&text);
-                }
-                aeon_claw_api::OutputContentBlock::Thinking { thinking, .. } => {
-                    reasoning.push_str(&thinking);
-                }
-                _ => {}
-            }
-        }
-        if output.trim().is_empty() && reasoning.trim().is_empty() {
+        if response.text.trim().is_empty()
+            && response
+                .reasoning
+                .as_deref()
+                .map(str::trim)
+                .unwrap_or_default()
+                .is_empty()
+        {
             return Err(AdapterError::Upstream(
                 "deepseek web provider returned empty text and reasoning".to_string(),
             ));
         }
-        let text = clean_deepseek_output(&output);
-        let reasoning = (!reasoning.trim().is_empty()).then(|| reasoning.trim().to_string());
+        let text = clean_deepseek_output(&response.text);
+        let reasoning = response.reasoning;
         Ok(UpstreamResponse { text, reasoning })
     }
 
@@ -313,14 +289,25 @@ fn raw_deepseek_session_from_options(
         .or_else(read_default_deepseek_session)
         .ok_or_else(|| {
             AdapterError::Upstream(
-                "DeepSeek Web session missing. Paste session JSON/Cookie or run FCACoreai DeepSeek login first.".to_string(),
+                "DeepSeek Web session missing. Paste session JSON/Cookie or save one to ~/.model-toolcall-adapter/deepseek_session.json.".to_string(),
             )
         })
 }
 
 fn read_default_deepseek_session() -> Option<String> {
-    let home = std::env::var("HOME").ok()?;
-    std::fs::read_to_string(format!("{home}/.FCACore/deepseek_session.json")).ok()
+    let path = default_deepseek_session_path().ok()?;
+    std::fs::read_to_string(path).ok()
+}
+
+pub fn default_deepseek_session_path() -> Result<PathBuf, AdapterError> {
+    if let Some(path) = std::env::var_os("ADAPTER_DEEPSEEK_SESSION_FILE") {
+        return Ok(PathBuf::from(path));
+    }
+    let home = std::env::var_os("HOME")
+        .ok_or_else(|| AdapterError::Upstream("HOME is not set".to_string()))?;
+    Ok(PathBuf::from(home)
+        .join(".model-toolcall-adapter")
+        .join("deepseek_session.json"))
 }
 
 fn clean_deepseek_output(text: &str) -> String {
@@ -335,7 +322,7 @@ fn is_deepseek_auth_error(text: &str) -> bool {
 
 fn deepseek_session_expired_error() -> AdapterError {
     AdapterError::Upstream(
-        "DeepSeek Web session invalid or expired. Re-login DeepSeek Web and refresh ~/.FCACore/deepseek_session.json, or paste a fresh session JSON/Cookie in the UI.".to_string(),
+        "DeepSeek Web session invalid or expired. Re-login DeepSeek Web and refresh ~/.model-toolcall-adapter/deepseek_session.json, or paste a fresh session JSON/Cookie in the UI.".to_string(),
     )
 }
 

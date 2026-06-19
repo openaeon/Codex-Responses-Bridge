@@ -13,7 +13,7 @@ use crate::protocol::{parse_tool_calls, render_tool_protocol_prompt};
 use crate::responses_store;
 use crate::types::{ParsedToolCall, UnifiedContent, UnifiedMessage, UnifiedRequest};
 use crate::ui::INDEX_HTML;
-use crate::upstream::UpstreamRequestOptions;
+use crate::upstream::{default_deepseek_session_path, UpstreamRequestOptions};
 use crate::wire::{chat, messages, responses, WireMode};
 
 const MAX_AUTO_TOOL_ROUNDS: usize = 4;
@@ -31,19 +31,7 @@ pub async fn deepseek_web_login(
     headers: HeaderMap,
 ) -> Result<Json<Value>, AdapterError> {
     verify_auth(&state, &headers)?;
-    let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .ok_or_else(|| AdapterError::Upstream("cannot resolve workspace root".to_string()))?;
-    let cli_manifest = workspace_root
-        .join("crates")
-        .join("aeon-claw-cli")
-        .join("Cargo.toml");
-    if !cli_manifest.exists() {
-        return Err(AdapterError::Upstream(format!(
-            "FCACoreai Rust DeepSeek login CLI not found: {}",
-            cli_manifest.display()
-        )));
-    }
+    let session_file = default_deepseek_session_path()?;
     let log_path = deepseek_login_log_path()?;
     if let Some(parent) = log_path.parent() {
         std::fs::create_dir_all(parent).map_err(|error| {
@@ -53,52 +41,48 @@ pub async fn deepseek_web_login(
             ))
         })?;
     }
-    let stdout = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)
-        .map_err(|error| {
-            AdapterError::Upstream(format!(
-                "failed to open DeepSeek login log {}: {error}",
-                log_path.display()
-            ))
-        })?;
-    let stderr = stdout.try_clone().map_err(|error| {
-        AdapterError::Upstream(format!(
-            "failed to clone DeepSeek login log {}: {error}",
-            log_path.display()
-        ))
-    })?;
 
-    std::process::Command::new("cargo")
-        .args([
-            "run",
-            "-p",
-            "aeon-claw-cli",
-            "--bin",
-            "aeon-claw-cli",
-            "--",
-            "tool",
-            "DeepSeekLogin",
-            "{}",
-        ])
-        .current_dir(workspace_root)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::from(stdout))
-        .stderr(std::process::Stdio::from(stderr))
-        .spawn()
-        .map_err(|error| {
-            AdapterError::Upstream(format!(
-                "failed to start FCACoreai Rust DeepSeek login: {error}"
-            ))
-        })?;
+    let opened = open_deepseek_login_page(&log_path)?;
 
     Ok(Json(json!({
-        "status": "started",
-        "message": "FCACoreai Rust DeepSeekLogin started. Finish login, then fetch models again.",
-        "session_file": "~/.FCACore/deepseek_session.json",
+        "status": if opened { "opened" } else { "manual" },
+        "message": "DeepSeek login page opened. After login, paste Session JSON/Cookie into the UI and click login/fetch models; the adapter will save it locally.",
+        "login_url": "https://chat.deepseek.com/",
+        "session_file": session_file,
         "log_file": log_path,
-        "command": "cargo run -p aeon-claw-cli --bin aeon-claw-cli -- tool DeepSeekLogin {}",
+    })))
+}
+
+pub async fn deepseek_web_session_save(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(payload): Json<Value>,
+) -> Result<Json<Value>, AdapterError> {
+    verify_auth(&state, &headers)?;
+    let session = payload
+        .get("session")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| AdapterError::InvalidRequest("session is required".to_string()))?;
+    let path = default_deepseek_session_path()?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| {
+            AdapterError::Upstream(format!(
+                "failed to create DeepSeek session dir {}: {error}",
+                parent.display()
+            ))
+        })?;
+    }
+    std::fs::write(&path, normalize_deepseek_session_for_storage(session)?).map_err(|error| {
+        AdapterError::Upstream(format!(
+            "failed to write DeepSeek session {}: {error}",
+            path.display()
+        ))
+    })?;
+    Ok(Json(json!({
+        "status": "saved",
+        "session_file": path,
     })))
 }
 
@@ -178,8 +162,44 @@ fn deepseek_login_log_path() -> Result<std::path::PathBuf, AdapterError> {
     let home = std::env::var_os("HOME")
         .ok_or_else(|| AdapterError::Upstream("HOME is not set".to_string()))?;
     Ok(std::path::PathBuf::from(home)
-        .join(".FCACore")
+        .join(".model-toolcall-adapter")
         .join("deepseek_login_adapter.log"))
+}
+
+fn open_deepseek_login_page(log_path: &std::path::Path) -> Result<bool, AdapterError> {
+    let url = "https://chat.deepseek.com/";
+    let mut command = if cfg!(target_os = "macos") {
+        let mut command = std::process::Command::new("open");
+        command.arg(url);
+        command
+    } else if cfg!(target_os = "windows") {
+        let mut command = std::process::Command::new("cmd");
+        command.args(["/C", "start", "", url]);
+        command
+    } else {
+        let mut command = std::process::Command::new("xdg-open");
+        command.arg(url);
+        command
+    };
+
+    match command.spawn() {
+        Ok(_) => {
+            let _ = std::fs::write(log_path, format!("opened {url}\n"));
+            Ok(true)
+        }
+        Err(error) => {
+            let _ = std::fs::write(log_path, format!("failed to open {url}: {error}\n"));
+            Ok(false)
+        }
+    }
+}
+
+fn normalize_deepseek_session_for_storage(session: &str) -> Result<String, AdapterError> {
+    if let Ok(value) = serde_json::from_str::<Value>(session) {
+        return serde_json::to_string_pretty(&value)
+            .map_err(|error| AdapterError::Upstream(format!("serialize session json: {error}")));
+    }
+    Ok(session.to_string())
 }
 
 pub async fn models(
@@ -205,7 +225,11 @@ pub async fn chat_completions(
     headers: HeaderMap,
     Json(payload): Json<Value>,
 ) -> Result<Json<Value>, AdapterError> {
-    tracing::info!("Route chat_completions: headers={:?}, payload={:?}", headers, payload);
+    tracing::info!(
+        "Route chat_completions: headers={:?}, payload={:?}",
+        headers,
+        payload
+    );
     verify_auth(&state, &headers)?;
     handle(
         state,
@@ -236,7 +260,11 @@ pub async fn responses(
     headers: HeaderMap,
     Json(mut payload): Json<Value>,
 ) -> Result<Response, AdapterError> {
-    tracing::info!("Route responses: headers={:?}, payload={:?}", headers, payload);
+    tracing::info!(
+        "Route responses: headers={:?}, payload={:?}",
+        headers,
+        payload
+    );
     verify_auth(&state, &headers)?;
     let stream = payload
         .get("stream")
@@ -382,9 +410,14 @@ fn verify_auth(state: &AppState, headers: &HeaderMap) -> Result<(), AdapterError
         .get("x-api-key")
         .and_then(|value| value.to_str().ok())
         .map(str::trim);
-    
-    tracing::info!("verify_auth: expected='{}', got bearer={:?}, got x-api-key={:?}", expected, bearer, api_key);
-    
+
+    tracing::info!(
+        "verify_auth: expected='{}', got bearer={:?}, got x-api-key={:?}",
+        expected,
+        bearer,
+        api_key
+    );
+
     if expected.is_empty() {
         return Ok(());
     }
@@ -414,7 +447,11 @@ async fn handle_value(
     upstream_options: UpstreamRequestOptions,
 ) -> Result<Value, AdapterError> {
     let mut request = UnifiedRequest::from_wire_payload(mode, payload)?;
-    tracing::info!("Received request with model={:?}, upstream_options={:?}", request.model, upstream_options);
+    tracing::info!(
+        "Received request with model={:?}, upstream_options={:?}",
+        request.model,
+        upstream_options
+    );
     if request.stream {
         return Err(AdapterError::StreamUnsupported);
     }
@@ -448,10 +485,17 @@ async fn handle_value(
         }
         WireMode::ChatCompletions | WireMode::Messages => {
             let prompt = request.render_prompt_with_tool_protocol(&protocol);
-            let model_text = state
+            let upstream_response = state
                 .upstream
                 .complete(&request, &prompt, &upstream_options)
                 .await?;
+            if let Some(reasoning) = upstream_response.reasoning.as_deref() {
+                tracing::debug!(
+                    reasoning_chars = reasoning.chars().count(),
+                    "upstream reasoning"
+                );
+            }
+            let model_text = upstream_response.text;
             let tool_calls = parse_tool_calls(&model_text);
             let mut body = match mode {
                 WireMode::ChatCompletions => chat::response(&request, &model_text, &tool_calls),
@@ -614,10 +658,17 @@ async fn create_responses_body_with_auto_tools(
     let mut output = Vec::new();
     for _ in 0..MAX_AUTO_TOOL_ROUNDS {
         let prompt = request.render_prompt_with_tool_protocol(protocol);
-        let model_text = state
+        let upstream_response = state
             .upstream
             .complete(&request, &prompt, upstream_options)
             .await?;
+        if let Some(reasoning) = upstream_response.reasoning.as_deref() {
+            tracing::debug!(
+                reasoning_chars = reasoning.chars().count(),
+                "upstream reasoning"
+            );
+        }
+        let model_text = upstream_response.text;
         let tool_calls = parse_tool_calls(&model_text);
         if tool_calls.is_empty() {
             output.push(responses::message_output_item(&model_text));

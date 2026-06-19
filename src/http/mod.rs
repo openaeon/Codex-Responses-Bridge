@@ -34,6 +34,10 @@ pub async fn serve(config: AppConfig) -> anyhow::Result<()> {
         .route("/", get(routes::ui))
         .route("/ui", get(routes::ui))
         .route("/deepseek-web/login", post(routes::deepseek_web_login))
+        .route(
+            "/deepseek-web/session",
+            post(routes::deepseek_web_session_save),
+        )
         .route("/tools/market/overview", post(routes::market_overview))
         .route("/v1/models", get(routes::models))
         .route("/v1/chat/completions", post(routes::chat_completions))
