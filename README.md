@@ -75,6 +75,64 @@ The core modules are intentionally small:
 
 ## Quick Start
 
+### Use a release package
+
+Prebuilt packages are written to `dist/packages` when you run the packaging commands below:
+
+```text
+dist/packages/
+├── model-toolcall-adapter-rs-windows-x64-exe.zip
+├── model-toolcall-adapter-rs-macos-arm64.tar.gz
+├── model-toolcall-adapter-rs-linux-x64-server.tar.gz
+├── model-toolcall-adapter-rs-linux-arm64-server.tar.gz
+└── SHA256SUMS.txt
+```
+
+Windows:
+
+```powershell
+Expand-Archive .\model-toolcall-adapter-rs-windows-x64-exe.zip
+cd .\model-toolcall-adapter-rs-windows-x64-exe\model-toolcall-adapter-rs-windows-x64
+.\model-toolcall-adapter-rs.exe
+```
+
+macOS Apple Silicon:
+
+```bash
+tar -xzf model-toolcall-adapter-rs-macos-arm64.tar.gz
+cd model-toolcall-adapter-rs-macos-arm64
+chmod +x ./model-toolcall-adapter-rs
+./model-toolcall-adapter-rs
+```
+
+Linux server x64:
+
+```bash
+tar -xzf model-toolcall-adapter-rs-linux-x64-server.tar.gz
+cd model-toolcall-adapter-rs-linux-x64
+chmod +x ./model-toolcall-adapter-rs
+./model-toolcall-adapter-rs
+```
+
+Linux server ARM64:
+
+```bash
+tar -xzf model-toolcall-adapter-rs-linux-arm64-server.tar.gz
+cd model-toolcall-adapter-rs-linux-arm64
+chmod +x ./model-toolcall-adapter-rs
+./model-toolcall-adapter-rs
+```
+
+Then open:
+
+```text
+http://127.0.0.1:8787/ui
+```
+
+The first-run wizard lets the user choose a provider, log in to DeepSeek Web through the controlled browser, capture the session, view the adapter key, and write Codex config.
+
+### Run from source
+
 ```bash
 git clone https://github.com/openaeon/model-toolcall-adapter-rs.git
 cd model-toolcall-adapter-rs
@@ -142,6 +200,77 @@ requires_openai_auth = true
 Restart Codex CLI/app after writing the config.
 
 If the Codex desktop app says it cannot update model settings, open `/ui`, run Step 3's "Configure Codex", then check that `~/.codex/config.toml` starts with `model_provider = "ModelToolCallAdapter"` and that `~/.codex/auth.json` has an `OPENAI_API_KEY` starting with the adapter's `adp_` key. Controlled Chrome may print `Registration URL fetching failed`, `DEPRECATED_ENDPOINT`, or `ConnectionHandler failed with net error`; those are usually Chrome background/GCM noise, not a DeepSeek session capture failure.
+
+## Packaging
+
+The project is a single Rust binary. Release packages include the binary and a small `README.txt`.
+
+Required tools:
+
+```bash
+rustup target add aarch64-apple-darwin
+rustup target add x86_64-pc-windows-gnu
+rustup target add x86_64-unknown-linux-musl
+rustup target add aarch64-unknown-linux-musl
+cargo install cargo-zigbuild
+brew install zig
+```
+
+Build binaries:
+
+```bash
+cargo build --release --target aarch64-apple-darwin
+cargo zigbuild --release --target x86_64-unknown-linux-musl
+cargo zigbuild --release --target aarch64-unknown-linux-musl
+cargo zigbuild --release --target x86_64-pc-windows-gnu
+```
+
+Create packages:
+
+```bash
+mkdir -p dist/packages \
+  dist/work/model-toolcall-adapter-rs-macos-arm64 \
+  dist/work/model-toolcall-adapter-rs-linux-x64 \
+  dist/work/model-toolcall-adapter-rs-linux-arm64 \
+  dist/work/model-toolcall-adapter-rs-windows-x64
+
+cp target/aarch64-apple-darwin/release/model-toolcall-adapter-rs \
+  dist/work/model-toolcall-adapter-rs-macos-arm64/model-toolcall-adapter-rs
+cp target/x86_64-unknown-linux-musl/release/model-toolcall-adapter-rs \
+  dist/work/model-toolcall-adapter-rs-linux-x64/model-toolcall-adapter-rs
+cp target/aarch64-unknown-linux-musl/release/model-toolcall-adapter-rs \
+  dist/work/model-toolcall-adapter-rs-linux-arm64/model-toolcall-adapter-rs
+cp target/x86_64-pc-windows-gnu/release/model-toolcall-adapter-rs.exe \
+  dist/work/model-toolcall-adapter-rs-windows-x64/model-toolcall-adapter-rs.exe
+
+for d in dist/work/model-toolcall-adapter-rs-*; do
+  cat > "$d/README.txt" <<'EOF'
+Model Toolcall Adapter RS
+
+Run:
+  macOS/Linux:
+    chmod +x ./model-toolcall-adapter-rs
+    ./model-toolcall-adapter-rs
+
+  Windows:
+    .\model-toolcall-adapter-rs.exe
+
+Default UI:
+  http://127.0.0.1:8787/ui
+
+Local config:
+  ~/.model-toolcall-adapter/config.json
+EOF
+done
+
+(cd dist/work && tar -czf ../packages/model-toolcall-adapter-rs-macos-arm64.tar.gz model-toolcall-adapter-rs-macos-arm64)
+(cd dist/work && tar -czf ../packages/model-toolcall-adapter-rs-linux-x64-server.tar.gz model-toolcall-adapter-rs-linux-x64)
+(cd dist/work && tar -czf ../packages/model-toolcall-adapter-rs-linux-arm64-server.tar.gz model-toolcall-adapter-rs-linux-arm64)
+(cd dist/work && zip -qr ../packages/model-toolcall-adapter-rs-windows-x64-exe.zip model-toolcall-adapter-rs-windows-x64)
+shasum -a 256 dist/packages/* > dist/packages/SHA256SUMS.txt
+```
+
+Packaging needs a few GB of free disk space because Cargo keeps per-target build artifacts. If the build fails with `No space left on device`, keep `dist/packages`, remove failed target folders under `target/`, and rebuild one target at a time.
 
 ## Configuration
 

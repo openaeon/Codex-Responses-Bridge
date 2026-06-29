@@ -75,6 +75,64 @@ model-toolcall-adapter-rs
 
 ## 快速开始
 
+### 使用发行包
+
+运行下方“打包教程”后，预构建包会生成在 `dist/packages`：
+
+```text
+dist/packages/
+├── model-toolcall-adapter-rs-windows-x64-exe.zip
+├── model-toolcall-adapter-rs-macos-arm64.tar.gz
+├── model-toolcall-adapter-rs-linux-x64-server.tar.gz
+├── model-toolcall-adapter-rs-linux-arm64-server.tar.gz
+└── SHA256SUMS.txt
+```
+
+Windows：
+
+```powershell
+Expand-Archive .\model-toolcall-adapter-rs-windows-x64-exe.zip
+cd .\model-toolcall-adapter-rs-windows-x64-exe\model-toolcall-adapter-rs-windows-x64
+.\model-toolcall-adapter-rs.exe
+```
+
+macOS Apple Silicon：
+
+```bash
+tar -xzf model-toolcall-adapter-rs-macos-arm64.tar.gz
+cd model-toolcall-adapter-rs-macos-arm64
+chmod +x ./model-toolcall-adapter-rs
+./model-toolcall-adapter-rs
+```
+
+Linux 服务器 x64：
+
+```bash
+tar -xzf model-toolcall-adapter-rs-linux-x64-server.tar.gz
+cd model-toolcall-adapter-rs-linux-x64
+chmod +x ./model-toolcall-adapter-rs
+./model-toolcall-adapter-rs
+```
+
+Linux 服务器 ARM64：
+
+```bash
+tar -xzf model-toolcall-adapter-rs-linux-arm64-server.tar.gz
+cd model-toolcall-adapter-rs-linux-arm64
+chmod +x ./model-toolcall-adapter-rs
+./model-toolcall-adapter-rs
+```
+
+然后打开：
+
+```text
+http://127.0.0.1:8787/ui
+```
+
+首次启动按页面向导操作：选择供应商、登录 DeepSeek Web、捕获 session、查看 Adapter Key，并可一键写入 Codex 配置。
+
+### 从源码运行
+
 ```bash
 git clone https://github.com/openaeon/model-toolcall-adapter-rs.git
 cd model-toolcall-adapter-rs
@@ -142,6 +200,77 @@ requires_openai_auth = true
 如果 Codex CLI/app 已经在运行，配置后需要重启。
 
 如果 Codex 桌面端提示“无法更新模型设置”，先打开 `/ui` 第三步点击“一键配置 Codex”，再检查 `~/.codex/config.toml` 顶部是否已经写入 `model_provider = "ModelToolCallAdapter"`，以及 `~/.codex/auth.json` 里的 `OPENAI_API_KEY` 是否为 `adp_` 开头的 adapter key。受控 Chrome 偶尔输出 `Registration URL fetching failed`、`DEPRECATED_ENDPOINT`、`ConnectionHandler failed with net error` 这类 GCM/后台联网日志，通常只是 Chrome 自身服务噪声，不代表 DeepSeek session 捕获失败。
+
+## 打包教程
+
+本项目是单个 Rust 二进制。发行包只包含二进制文件和一个简单的 `README.txt`。
+
+准备工具：
+
+```bash
+rustup target add aarch64-apple-darwin
+rustup target add x86_64-pc-windows-gnu
+rustup target add x86_64-unknown-linux-musl
+rustup target add aarch64-unknown-linux-musl
+cargo install cargo-zigbuild
+brew install zig
+```
+
+编译二进制：
+
+```bash
+cargo build --release --target aarch64-apple-darwin
+cargo zigbuild --release --target x86_64-unknown-linux-musl
+cargo zigbuild --release --target aarch64-unknown-linux-musl
+cargo zigbuild --release --target x86_64-pc-windows-gnu
+```
+
+生成发行包：
+
+```bash
+mkdir -p dist/packages \
+  dist/work/model-toolcall-adapter-rs-macos-arm64 \
+  dist/work/model-toolcall-adapter-rs-linux-x64 \
+  dist/work/model-toolcall-adapter-rs-linux-arm64 \
+  dist/work/model-toolcall-adapter-rs-windows-x64
+
+cp target/aarch64-apple-darwin/release/model-toolcall-adapter-rs \
+  dist/work/model-toolcall-adapter-rs-macos-arm64/model-toolcall-adapter-rs
+cp target/x86_64-unknown-linux-musl/release/model-toolcall-adapter-rs \
+  dist/work/model-toolcall-adapter-rs-linux-x64/model-toolcall-adapter-rs
+cp target/aarch64-unknown-linux-musl/release/model-toolcall-adapter-rs \
+  dist/work/model-toolcall-adapter-rs-linux-arm64/model-toolcall-adapter-rs
+cp target/x86_64-pc-windows-gnu/release/model-toolcall-adapter-rs.exe \
+  dist/work/model-toolcall-adapter-rs-windows-x64/model-toolcall-adapter-rs.exe
+
+for d in dist/work/model-toolcall-adapter-rs-*; do
+  cat > "$d/README.txt" <<'EOF'
+Model Toolcall Adapter RS
+
+Run:
+  macOS/Linux:
+    chmod +x ./model-toolcall-adapter-rs
+    ./model-toolcall-adapter-rs
+
+  Windows:
+    .\model-toolcall-adapter-rs.exe
+
+Default UI:
+  http://127.0.0.1:8787/ui
+
+Local config:
+  ~/.model-toolcall-adapter/config.json
+EOF
+done
+
+(cd dist/work && tar -czf ../packages/model-toolcall-adapter-rs-macos-arm64.tar.gz model-toolcall-adapter-rs-macos-arm64)
+(cd dist/work && tar -czf ../packages/model-toolcall-adapter-rs-linux-x64-server.tar.gz model-toolcall-adapter-rs-linux-x64)
+(cd dist/work && tar -czf ../packages/model-toolcall-adapter-rs-linux-arm64-server.tar.gz model-toolcall-adapter-rs-linux-arm64)
+(cd dist/work && zip -qr ../packages/model-toolcall-adapter-rs-windows-x64-exe.zip model-toolcall-adapter-rs-windows-x64)
+shasum -a 256 dist/packages/* > dist/packages/SHA256SUMS.txt
+```
+
+打包需要几 GB 可用磁盘空间，因为 Cargo 会为每个 target 保存构建产物。如果遇到 `No space left on device`，保留 `dist/packages`，删除 `target/` 下失败 target 的目录，再一次只编译一个 target。
 
 ## 配置
 
