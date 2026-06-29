@@ -2,138 +2,92 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-> A standalone Rust adapter that lets text-only models work with Codex-style, OpenAI-compatible, and Anthropic-style coding clients.
+> A local protocol adapter that lets upstream models without reliable native tool calling appear as standard tool-capable OpenAI / Codex / Anthropic-compatible endpoints.
 
-`model-toolcall-adapter-rs` exposes OpenAI-compatible and Anthropic-style HTTP endpoints, converts standard tool definitions into a stable text protocol, sends that prompt to an upstream model, then parses the model's textual tool intent back into standard tool-call responses.
+Current release: `v0.2.0`
 
-It is designed for models and providers that are useful at coding and reasoning but do not reliably support native function calling.
+This project has one job:
 
-The goal is practical compatibility with mainstream programming agents and editor tools: Codex-style clients that expect OpenAI Responses, Claude/Anthropic-style clients that speak Messages-shaped payloads, and developer tools that can point at an OpenAI-compatible `base_url`.
+```text
+client sends standard tools
+-> adapter renders a text tool protocol for the upstream model
+-> upstream model emits plain-text tool intent
+-> adapter parses that intent into standard function_call / tool_calls
+-> caller executes the tool and sends tool output back
+```
 
-## What It Does
+The adapter does not execute user tools. It converts protocols and preserves state; your client, application server, or agent runtime owns actual tool execution.
 
-- Serves `POST /v1/chat/completions` for OpenAI Chat Completions clients.
-- Serves `POST /v1/responses` plus retrieve, input-items, cancel, and compact endpoints for OpenAI Responses-style clients.
-- Serves `POST /v1/messages` for Anthropic Messages-style payloads.
-- Converts OpenAI function tools into a model-readable XML/text protocol.
-- Parses XML, JSON, and tolerant tool-call formats from plain model output.
-- Supports OpenAI-compatible upstreams such as local Ollama/vLLM/LM Studio-style APIs.
-- Includes a DeepSeek Web upstream provider with local session storage, PoW handling, SSE parsing, and reasoning/text separation.
-- Includes a setup wizard at `/ui` for provider selection, adapter key generation, DeepSeek Web login, and bridge configuration.
+## When To Use It
 
-## Screenshot
+Use it when:
 
-![Setup wizard demo](docs/assets/setup-wizard.png)
+- You have a strong coding or reasoning model that does not reliably support native function calling.
+- You want to connect DeepSeek Web, Ollama, vLLM, LM Studio, llama.cpp, or another OpenAI-compatible upstream to Codex-style clients.
+- Your client already sends OpenAI `tools`, but your upstream only produces plain text.
+- You need one bridge for Responses, Chat Completions, and Anthropic Messages-shaped requests.
 
-The project is now standalone. It does not depend on `../crates/aeon-claw-api`, `aeon-claw-cli`, or the FCACoreai workspace at build time or runtime.
+Do not use it as:
 
-## Compatibility Targets
+- A tool executor or full agent runtime.
+- A full replacement for OpenAI-hosted vector stores or hosted tools.
+- A byte-for-byte implementation of OpenAI server-side Structured Outputs or encrypted reasoning tokens.
+- A distributed response-state backend shared across multiple remote nodes.
 
-The adapter is protocol-oriented. It does not require a tool or editor to know about this project specifically; it only needs to speak one of the supported HTTP formats.
+## Capabilities
 
-| Client family | Expected interface | Adapter endpoint |
-| --- | --- | --- |
-| Codex-style coding agents | OpenAI Responses-style API | `/v1/responses` |
-| OpenAI-compatible coding tools | Chat Completions API | `/v1/chat/completions` |
-| Anthropic/Claude-style clients | Messages-shaped payloads | `/v1/messages` |
-| Editor and terminal agents with custom base URL support | OpenAI-compatible `base_url` | `http://127.0.0.1:8787/v1` |
-| Local model stacks | Ollama, vLLM, LM Studio, llama.cpp-style OpenAI APIs | upstream `ADAPTER_UPSTREAM_BASE_URL` |
-
-This makes it suitable as a bridge for coding environments such as Codex-compatible CLIs, Claude/Anthropic-style agent runtimes, Cursor/Continue-like editor integrations, Aider/OpenCode-style terminal agents, and custom internal agent platforms. Compatibility depends on the client allowing a custom base URL and on which wire format it uses.
-
-The adapter is not an official OpenAI, Anthropic, Cursor, Continue, Aider, Cline, or OpenCode integration. It is a local protocol bridge that helps those classes of tools talk to upstream models that otherwise only return plain text.
+| Capability | Status |
+| --- | --- |
+| OpenAI Chat Completions | `POST /v1/chat/completions` |
+| OpenAI Responses | create / retrieve / delete / input_items / input_tokens / cancel / compact |
+| Conversations | create / retrieve / update / delete / items |
+| Anthropic Messages | `POST /v1/messages` shape |
+| Tool-call adaptation | Parses XML, JSON, and tolerant plain-text tool intents into standard calls |
+| Tool execution | Not executed by the adapter |
+| Streaming | Real Responses SSE; Chat / Messages streaming is not yet incremental |
+| Long tasks | Responses `background: true`, retrieve polling, cancel |
+| Structured output | `json_object` and common recursive `json_schema` checks |
+| Reasoning | Reasoning/text separation; local opaque `reasoning.encrypted_content` placeholder/pass-through |
+| Images and files | Standard image/file request parts; DeepSeek Web uploads and references files internally |
+| DeepSeek Web | Controlled-browser login, session capture, PoW, SSE parsing, search/reasoning/expert/vision mapping |
+| Codex | One-click backup and write of `~/.codex/config.toml` and `auth.json` |
+| Local state | JSON response/conversation store with sidecar file locks and atomic replacement |
 
 ## Architecture
 
 ```text
-Coding Client / Agent Runtime
+Codex / SDK / Agent Runtime
         |
-        | Codex-style Responses
-        | OpenAI Chat Completions
-        | Anthropic-style Messages
+        | OpenAI Responses
+        | Chat Completions
+        | Anthropic Messages
         v
 model-toolcall-adapter-rs
         |
-        | tool schema -> text tool protocol
-        | model text -> standard tool calls
+        | tools -> text protocol
+        | plain text -> standard tool calls
         v
-Upstream model
+Upstream Provider
         |
         | OpenAI-compatible API
         | DeepSeek Web
         v
-Plain-text model completion
+Actual model
 ```
 
-The core modules are intentionally small:
-
-- `src/wire/*` converts request and response wire formats.
-- `src/protocol/mod.rs` renders the text tool protocol and parses tool calls.
-- `src/upstream.rs` routes to OpenAI-compatible and DeepSeek Web upstreams.
-- `src/providers/deepseek_web/` implements the standalone DeepSeek Web provider, session handling, PoW, and SSE parsing.
-- `src/responses_store.rs` keeps in-memory Responses state for retrieve, input-items, cancel, and continuation flows.
+| Path | Responsibility |
+| --- | --- |
+| `src/wire/` | External wire formats to/from the internal unified request |
+| `src/protocol/` | Tool protocol prompt rendering and model-output parsing |
+| `src/providers/openai_compat.rs` | OpenAI-compatible upstreams |
+| `src/providers/deepseek_web/` | DeepSeek Web login, session, PoW, uploads, completion, SSE |
+| `src/responses_store.rs` | Local Responses / Conversations state |
+| `src/http/routes.rs` | HTTP routes, auth, Codex setup, Responses state machine |
+| `src/ui.rs` | Local setup wizard |
 
 ## Quick Start
 
-### Use a release package
-
-Prebuilt packages are written to `dist/packages` when you run the packaging commands below:
-
-```text
-dist/packages/
-├── model-toolcall-adapter-rs-windows-x64-exe.zip
-├── model-toolcall-adapter-rs-macos-arm64.tar.gz
-├── model-toolcall-adapter-rs-linux-x64-server.tar.gz
-├── model-toolcall-adapter-rs-linux-arm64-server.tar.gz
-└── SHA256SUMS.txt
-```
-
-Windows:
-
-```powershell
-Expand-Archive .\model-toolcall-adapter-rs-windows-x64-exe.zip
-cd .\model-toolcall-adapter-rs-windows-x64-exe\model-toolcall-adapter-rs-windows-x64
-.\model-toolcall-adapter-rs.exe
-```
-
-Windows shells do not search the current directory automatically, so keep the `.\` prefix. The common DeepSeek Web `sha256` PoW challenge is solved inside the Rust adapter, so Windows users do not need to install Node.js for that path.
-
-macOS Apple Silicon:
-
-```bash
-tar -xzf model-toolcall-adapter-rs-macos-arm64.tar.gz
-cd model-toolcall-adapter-rs-macos-arm64
-chmod +x ./model-toolcall-adapter-rs
-./model-toolcall-adapter-rs
-```
-
-Linux server x64:
-
-```bash
-tar -xzf model-toolcall-adapter-rs-linux-x64-server.tar.gz
-cd model-toolcall-adapter-rs-linux-x64
-chmod +x ./model-toolcall-adapter-rs
-./model-toolcall-adapter-rs
-```
-
-Linux server ARM64:
-
-```bash
-tar -xzf model-toolcall-adapter-rs-linux-arm64-server.tar.gz
-cd model-toolcall-adapter-rs-linux-arm64
-chmod +x ./model-toolcall-adapter-rs
-./model-toolcall-adapter-rs
-```
-
-Then open:
-
-```text
-http://127.0.0.1:8787/ui
-```
-
-The first-run wizard lets the user choose a provider, log in to DeepSeek Web through the controlled browser, capture the session, view the adapter key, and write Codex config.
-
-### Run from source
+From source:
 
 ```bash
 git clone https://github.com/openaeon/model-toolcall-adapter-rs.git
@@ -141,57 +95,76 @@ cd model-toolcall-adapter-rs
 cargo run
 ```
 
-Open the built-in UI:
+Open:
 
 ```text
 http://127.0.0.1:8787/ui
 ```
 
-If port `8787` is already in use:
+If the port is already in use:
 
 ```bash
 ADAPTER_BIND=127.0.0.1:8899 cargo run
 ```
 
-Then open:
+Release packages are expected under:
 
 ```text
-http://127.0.0.1:8899/ui
+dist/packages/
+├── model-toolcall-adapter-rs-v0.2.0-windows-x64-exe.zip
+├── model-toolcall-adapter-rs-v0.2.0-macos-arm64.tar.gz
+├── model-toolcall-adapter-rs-v0.2.0-linux-x64-server.tar.gz
+├── model-toolcall-adapter-rs-v0.2.0-linux-arm64-server.tar.gz
+└── SHA256SUMS.txt
 ```
 
-On first startup, the adapter creates:
+`SHA256SUMS.txt` verifies the four platform archives. The repository tracks release archives and checksums, not unpacked temporary package directories.
+
+Windows:
+
+```powershell
+Expand-Archive .\model-toolcall-adapter-rs-v0.2.0-windows-x64-exe.zip
+cd .\model-toolcall-adapter-rs-windows-x64-exe\model-toolcall-adapter-rs-windows-x64
+.\model-toolcall-adapter-rs.exe
+```
+
+macOS / Linux:
+
+```bash
+tar -xzf model-toolcall-adapter-rs-v0.2.0-macos-arm64.tar.gz
+cd model-toolcall-adapter-rs-macos-arm64
+chmod +x ./model-toolcall-adapter-rs
+./model-toolcall-adapter-rs
+```
+
+## First Run
+
+The first run creates:
 
 ```text
 ~/.model-toolcall-adapter/config.json
 ```
 
-with a random `adapter_api_key`. Open `/ui` and follow the wizard:
+It contains a random `adapter_api_key`. Open `/ui` and follow the three setup steps:
 
-- Step 1: choose `openai-compatible` or `deepseek-web`.
-- Step 2: for DeepSeek Web, log in through the controlled browser profile opened by the adapter.
-- Step 3: copy the Base URL, Adapter Key, model, and request examples into your client, or write Codex config with one click.
+1. Select `openai-compatible` or `deepseek-web`.
+2. For DeepSeek Web, start the controlled browser and log in.
+3. Capture the session and copy the base URL, adapter key, model name, or apply Codex config.
 
-To start directly with an OpenAI-compatible upstream:
+![Setup wizard](docs/assets/setup-wizard.png)
 
-```bash
-cargo run -- \
-  --bind 127.0.0.1:8787 \
-  --upstream-base-url http://127.0.0.1:11434/v1 \
-  --upstream-model qwen3-coder \
-  --model-aliases codex-adapter=qwen3-coder
-```
+## Codex
 
-## One-click Codex Setup
+The setup wizard can write Codex configuration for you. It backs up:
 
-The setup wizard's "Configure Codex" action:
+- `~/.codex/config.toml`
+- `~/.codex/auth.json`
 
-- Backs up `~/.codex/config.toml` and `~/.codex/auth.json`.
-- Writes the adapter model selection near the top of `config.toml` and the provider table near the end.
-- Writes the current random `adapter_api_key` to `auth.json` as `OPENAI_API_KEY`.
-
-The generated provider uses the Codex-supported Responses wire:
+Then it writes a Responses provider:
 
 ```toml
+model_provider = "ModelToolCallAdapter"
+
 [model_providers.ModelToolCallAdapter]
 name = "ModelToolCallAdapter"
 base_url = "http://127.0.0.1:8787/v1"
@@ -199,15 +172,235 @@ wire_api = "responses"
 requires_openai_auth = true
 ```
 
-Restart Codex CLI/app after writing the config.
+And stores the adapter key:
 
-If the Codex desktop app says it cannot update model settings, open `/ui`, run Step 3's "Configure Codex", then check that `~/.codex/config.toml` starts with `model_provider = "ModelToolCallAdapter"` and that `~/.codex/auth.json` has an `OPENAI_API_KEY` starting with the adapter's `adp_` key. Controlled Chrome may print `Registration URL fetching failed`, `DEPRECATED_ENDPOINT`, or `ConnectionHandler failed with net error`; those are usually Chrome background/GCM noise, not a DeepSeek session capture failure.
+```json
+{
+  "OPENAI_API_KEY": "adp_xxx"
+}
+```
+
+Restart Codex after applying the config.
+
+## Providers
+
+OpenAI-compatible upstream:
+
+```bash
+ADAPTER_UPSTREAM_BASE_URL=http://127.0.0.1:11434/v1 \
+ADAPTER_UPSTREAM_MODEL=qwen3-coder \
+cargo run
+```
+
+Model aliases:
+
+```bash
+ADAPTER_MODEL_ALIASES=gpt-5-codex=qwen3-coder,gpt-5-mini=qwen3-fast cargo run
+```
+
+DeepSeek Web models:
+
+| Model | Meaning |
+| --- | --- |
+| `deepseek-web/reasoner` | reasoning |
+| `deepseek-web/chat` | normal chat |
+| `deepseek-web/search` | search-enabled mode |
+| `deepseek-web/expert` | expert mode |
+| `deepseek-web/vision` | vision/file mode |
+
+DeepSeek session is saved to:
+
+```text
+~/.model-toolcall-adapter/deepseek_session.json
+```
+
+Override it with:
+
+```bash
+ADAPTER_DEEPSEEK_SESSION_FILE=/path/to/deepseek_session.json cargo run
+```
+
+DeepSeek Web is an unofficial web upstream. If its private API, headers, PoW, or SSE format changes, the provider may need updates.
+
+## API Examples
+
+Responses tool call:
+
+```bash
+curl http://127.0.0.1:8787/v1/responses \
+  -H 'content-type: application/json' \
+  -H 'authorization: Bearer adp_xxx' \
+  -d '{
+    "model": "deepseek-web/reasoner",
+    "input": "Use a tool when external information is required.",
+    "tools": [{
+      "type": "function",
+      "name": "search_web",
+      "description": "Search by query",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string" }
+        },
+        "required": ["query"]
+      }
+    }]
+  }'
+```
+
+Tool output continuation:
+
+```bash
+curl http://127.0.0.1:8787/v1/responses \
+  -H 'content-type: application/json' \
+  -H 'authorization: Bearer adp_xxx' \
+  -d '{
+    "model": "deepseek-web/reasoner",
+    "previous_response_id": "resp_xxx",
+    "input": [{
+      "type": "function_call_output",
+      "call_id": "call_1",
+      "output": "Tool result"
+    }]
+  }'
+```
+
+Chat Completions tool call:
+
+```bash
+curl http://127.0.0.1:8787/v1/chat/completions \
+  -H 'content-type: application/json' \
+  -H 'authorization: Bearer adp_xxx' \
+  -d '{
+    "model": "deepseek-web/chat",
+    "messages": [{ "role": "user", "content": "Check Beijing weather" }],
+    "tools": [{
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "parameters": {
+          "type": "object",
+          "properties": { "city": { "type": "string" } },
+          "required": ["city"]
+        }
+      }
+    }]
+  }'
+```
+
+Responses streaming:
+
+```json
+{
+  "model": "deepseek-web/reasoner",
+  "input": "Analyze this project",
+  "stream": true
+}
+```
+
+Responses background mode:
+
+```json
+{
+  "model": "deepseek-web/reasoner",
+  "input": "Run a long analysis",
+  "background": true
+}
+```
+
+Poll:
+
+```bash
+curl http://127.0.0.1:8787/v1/responses/resp_xxx \
+  -H 'authorization: Bearer adp_xxx'
+```
+
+Cancel:
+
+```bash
+curl -X POST http://127.0.0.1:8787/v1/responses/resp_xxx/cancel \
+  -H 'authorization: Bearer adp_xxx'
+```
+
+## Images, Files, And Local File Search
+
+Use standard request parts. Responses example:
+
+```json
+{
+  "model": "deepseek-web/vision",
+  "input": [{
+    "type": "message",
+    "role": "user",
+    "content": [
+      { "type": "input_text", "text": "Inspect this image" },
+      { "type": "input_image", "image_url": "data:image/png;base64,..." }
+    ]
+  }]
+}
+```
+
+DeepSeek Web uploads attachments internally, waits for parsing/readiness, and sends private `ref_file_ids` upstream. Expert mode does not directly support file references, so file-bearing requests are bridged through the vision/file path when needed.
+
+Responses `tools:[{"type":"file_search"}]` searches only readable `input_file.file_data` content from the current request. It does not read arbitrary local files and is not a durable vector store.
+
+## Configuration
+
+| Setting | Environment variable | Default |
+| --- | --- | --- |
+| Bind address | `ADAPTER_BIND` | `127.0.0.1:8787` |
+| OpenAI-compatible upstream | `ADAPTER_UPSTREAM_BASE_URL` | `http://127.0.0.1:11434/v1` |
+| Upstream API key | `ADAPTER_UPSTREAM_API_KEY` | empty |
+| Upstream model | `ADAPTER_UPSTREAM_MODEL` | `local-model` |
+| Model aliases | `ADAPTER_MODEL_ALIASES` | empty |
+| Adapter API key | `ADAPTER_API_KEY` | local config |
+| Max tools | `ADAPTER_MAX_TOOL_DEFINITIONS` | `64` |
+| Request timeout | `ADAPTER_REQUEST_TIMEOUT_SECS` | `120` |
+| Config file | `ADAPTER_CONFIG_FILE` | `~/.model-toolcall-adapter/config.json` |
+| Response store | `ADAPTER_RESPONSE_STORE_FILE` | `~/.model-toolcall-adapter/responses_store.json` |
+| Conversation store | `ADAPTER_CONVERSATION_STORE_FILE` | `~/.model-toolcall-adapter/conversations_store.json` |
+| DeepSeek session | `ADAPTER_DEEPSEEK_SESSION_FILE` | `~/.model-toolcall-adapter/deepseek_session.json` |
+
+Per-request overrides:
+
+```http
+x-upstream-provider: deepseek-web
+x-upstream-base-url: https://api.example.com/v1
+x-upstream-api-key: sk-...
+x-deepseek-session: {"cookie":"..."}
+```
+
+## Endpoints
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /health` | Health check |
+| `GET /ui` | Setup wizard |
+| `GET /v1/models` | Model list |
+| `POST /v1/chat/completions` | Chat Completions |
+| `POST /v1/messages` | Anthropic Messages |
+| `POST /v1/responses` | Responses create |
+| `GET /v1/responses/{id}` | Retrieve response |
+| `DELETE /v1/responses/{id}` | Delete response |
+| `GET /v1/responses/{id}/input_items` | Response input items |
+| `POST /v1/responses/{id}/cancel` | Cancel background response |
+| `POST /v1/responses/input_tokens` | Estimate input tokens |
+| `POST /v1/responses/compact` | Compact response context |
+| `POST /v1/conversations` | Create conversation |
+| `GET /v1/conversations/{id}` | Retrieve conversation |
+| `POST /v1/conversations/{id}` | Update metadata |
+| `DELETE /v1/conversations/{id}` | Delete conversation |
+| `GET /v1/conversations/{id}/items` | List items |
+| `POST /v1/conversations/{id}/items` | Append items |
+| `GET /v1/conversations/{id}/items/{item_id}` | Retrieve item |
+| `DELETE /v1/conversations/{id}/items/{item_id}` | Delete item |
+| `GET /setup/state` | Setup state |
+| `POST /setup/provider` | Save provider |
+| `POST /setup/deepseek-browser/start` | Start DeepSeek login browser |
+| `POST /setup/deepseek-browser/capture` | Capture DeepSeek session |
+| `POST /setup/codex/apply` | Write Codex config |
 
 ## Packaging
-
-The project is a single Rust binary. Release packages include the binary and a small `README.txt`.
-
-Required tools:
 
 ```bash
 rustup target add aarch64-apple-darwin
@@ -218,8 +411,6 @@ cargo install cargo-zigbuild
 brew install zig
 ```
 
-Build binaries:
-
 ```bash
 cargo build --release --target aarch64-apple-darwin
 cargo zigbuild --release --target x86_64-unknown-linux-musl
@@ -227,314 +418,21 @@ cargo zigbuild --release --target aarch64-unknown-linux-musl
 cargo zigbuild --release --target x86_64-pc-windows-gnu
 ```
 
-Create packages:
-
-```bash
-mkdir -p dist/packages \
-  dist/work/model-toolcall-adapter-rs-macos-arm64 \
-  dist/work/model-toolcall-adapter-rs-linux-x64 \
-  dist/work/model-toolcall-adapter-rs-linux-arm64 \
-  dist/work/model-toolcall-adapter-rs-windows-x64
-
-cp target/aarch64-apple-darwin/release/model-toolcall-adapter-rs \
-  dist/work/model-toolcall-adapter-rs-macos-arm64/model-toolcall-adapter-rs
-cp target/x86_64-unknown-linux-musl/release/model-toolcall-adapter-rs \
-  dist/work/model-toolcall-adapter-rs-linux-x64/model-toolcall-adapter-rs
-cp target/aarch64-unknown-linux-musl/release/model-toolcall-adapter-rs \
-  dist/work/model-toolcall-adapter-rs-linux-arm64/model-toolcall-adapter-rs
-cp target/x86_64-pc-windows-gnu/release/model-toolcall-adapter-rs.exe \
-  dist/work/model-toolcall-adapter-rs-windows-x64/model-toolcall-adapter-rs.exe
-
-for d in dist/work/model-toolcall-adapter-rs-*; do
-  cat > "$d/README.txt" <<'EOF'
-Model Toolcall Adapter RS
-
-Run:
-  macOS/Linux:
-    chmod +x ./model-toolcall-adapter-rs
-    ./model-toolcall-adapter-rs
-
-  Windows:
-    .\model-toolcall-adapter-rs.exe
-
-Default UI:
-  http://127.0.0.1:8787/ui
-
-Local config:
-  ~/.model-toolcall-adapter/config.json
-EOF
-done
-
-(cd dist/work && tar -czf ../packages/model-toolcall-adapter-rs-macos-arm64.tar.gz model-toolcall-adapter-rs-macos-arm64)
-(cd dist/work && tar -czf ../packages/model-toolcall-adapter-rs-linux-x64-server.tar.gz model-toolcall-adapter-rs-linux-x64)
-(cd dist/work && tar -czf ../packages/model-toolcall-adapter-rs-linux-arm64-server.tar.gz model-toolcall-adapter-rs-linux-arm64)
-(cd dist/work && zip -qr ../packages/model-toolcall-adapter-rs-windows-x64-exe.zip model-toolcall-adapter-rs-windows-x64)
-shasum -a 256 dist/packages/* > dist/packages/SHA256SUMS.txt
-```
-
-Packaging needs a few GB of free disk space because Cargo keeps per-target build artifacts. If the build fails with `No space left on device`, keep `dist/packages`, remove failed target folders under `target/`, and rebuild one target at a time.
-
-## Configuration
-
-Every CLI flag also has an environment variable. Explicit CLI/env values override the local config file.
-
-```bash
-export ADAPTER_BIND=127.0.0.1:8787
-export ADAPTER_UPSTREAM_BASE_URL=http://127.0.0.1:11434/v1
-export ADAPTER_UPSTREAM_API_KEY=
-export ADAPTER_UPSTREAM_MODEL=qwen3-coder
-export ADAPTER_MODEL_ALIASES=codex-adapter=qwen3-coder
-export ADAPTER_API_KEY=local-dev-key
-export ADAPTER_DEEPSEEK_SESSION_FILE=~/.model-toolcall-adapter/deepseek_session.json
-cargo run
-```
-
-If `ADAPTER_API_KEY` is not set, the adapter reads or creates:
-
-```text
-~/.model-toolcall-adapter/config.json
-```
-
-and uses its random `adapter_api_key` to protect the API.
-
-`ADAPTER_MODEL_ALIASES` is a comma-separated mapping:
-
-```text
-external-name=upstream-name,another-name=another-upstream-name
-```
-
-For example:
-
-```bash
-export ADAPTER_MODEL_ALIASES=gpt-5-codex=deepseek-web/reasoner,gpt-5-mini=deepseek-web/chat
-```
-
-Clients may request `model: "gpt-5-codex"`, while the adapter sends the request to `deepseek-web/reasoner` and restores the external model name in the response.
-
-## Authentication
-
-If both `ADAPTER_API_KEY` and the local `adapter_api_key` are empty, adapter endpoints do not require authentication.
-
-If it is set, pass either:
-
-```http
-Authorization: Bearer local-dev-key
-```
-
-or:
-
-```http
-x-api-key: local-dev-key
-```
-
-Per-request upstream overrides are supported:
-
-```http
-x-upstream-base-url: https://api.example.com/v1
-x-upstream-api-key: sk-...
-x-upstream-provider: openai-compatible
-```
-
-For DeepSeek Web:
-
-```http
-x-upstream-provider: deepseek-web
-x-deepseek-session: {"cookie":"...","bearer":"...","last_session_id":"..."}
-```
-
-If `x-deepseek-session` is omitted, the adapter reads:
-
-```text
-~/.model-toolcall-adapter/deepseek_session.json
-```
-
-Set `ADAPTER_DEEPSEEK_SESSION_FILE` to use a different path.
-
-## DeepSeek Web
-
-DeepSeek Web support is fully local to this repository.
-
-The UI starts an isolated browser profile from `/setup/deepseek-browser/start` with a DevTools debugging port. After the user logs in to DeepSeek Web in that controlled browser, the UI can capture usable DeepSeek cookie/localStorage credentials and save them to:
-
-```text
-~/.model-toolcall-adapter/deepseek_session.json
-```
-
-If Chrome, Edge, Chromium, or Brave cannot be found, or if the debugging port is unavailable, the UI keeps a manual Session JSON/Cookie fallback.
-
-The saved object can contain:
-
-```json
-{
-  "cookie": "ds_session=...; ...",
-  "bearer": "optional-token",
-  "user_agent": "Mozilla/5.0 ...",
-  "base_url": "https://chat.deepseek.com",
-  "last_session_id": "optional-session-id"
-}
-```
-
-DeepSeek Web is an unofficial web upstream. If the web service changes its private endpoints, headers, or proof-of-work behavior, this provider may need updates.
-
-## Endpoints
-
-| Endpoint | Purpose |
-| --- | --- |
-| `GET /health` | Health check |
-| `GET /ui` | Built-in setup wizard |
-| `GET /v1/models` | List upstream and alias models |
-| `POST /v1/chat/completions` | OpenAI Chat Completions-compatible request |
-| `POST /v1/messages` | Anthropic Messages-style request |
-| `POST /v1/responses` | OpenAI Responses-style create |
-| `GET /v1/responses/{response_id}` | Retrieve in-memory response |
-| `GET /v1/responses/{response_id}/input_items` | List stored response input items |
-| `POST /v1/responses/{response_id}/cancel` | Cancel background response |
-| `POST /v1/responses/compact` | Compact response context |
-| `GET /setup/state` | Read setup wizard state and local config |
-| `POST /setup/provider` | Save provider selection |
-| `POST /setup/deepseek-browser/start` | Start the controlled DeepSeek Web login browser |
-| `POST /setup/deepseek-browser/capture` | Capture and save DeepSeek session from the controlled browser |
-| `POST /setup/codex/apply` | Backup and write Codex config/auth |
-| `POST /deepseek-web/login` | Open DeepSeek login page |
-| `POST /deepseek-web/session` | Save DeepSeek session locally |
-
-The same Responses routes are also available without `/v1` for clients that expect a base URL ending at the host.
-
-## Chat Completions Example
-
-```bash
-curl http://127.0.0.1:8787/v1/chat/completions \
-  -H 'content-type: application/json' \
-  -H 'authorization: Bearer local-dev-key' \
-  -d '{
-    "model": "qwen3-coder",
-    "messages": [
-      { "role": "user", "content": "查一下北京天气" }
-    ],
-    "tools": [{
-      "type": "function",
-      "function": {
-        "name": "get_weather",
-        "description": "Get weather by city",
-        "parameters": {
-          "type": "object",
-          "properties": {
-            "city": { "type": "string" }
-          },
-          "required": ["city"]
-        }
-      }
-    }]
-  }'
-```
-
-If the upstream model emits:
-
-```xml
-<tool_call id="call_1" name="get_weather">{"city":"北京"}</tool_call>
-```
-
-the adapter returns standard `tool_calls` in the Chat Completions response.
-
-## Responses Tool Loop
-
-First request:
-
-```bash
-curl http://127.0.0.1:8787/v1/responses \
-  -H 'content-type: application/json' \
-  -H 'authorization: Bearer local-dev-key' \
-  -d '{
-    "model": "qwen3-coder",
-    "input": "查一下北京天气",
-    "tools": [{
-      "type": "function",
-      "name": "get_weather",
-      "description": "Get weather by city",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "city": { "type": "string" }
-        },
-        "required": ["city"]
-      }
-    }]
-  }'
-```
-
-If the model emits a tool call, the adapter returns:
-
-```json
-{
-  "object": "response",
-  "status": "completed",
-  "output": [{
-    "type": "function_call",
-    "status": "completed",
-    "call_id": "call_1",
-    "name": "get_weather",
-    "arguments": "{\"city\":\"北京\"}"
-  }]
-}
-```
-
-After your client executes the tool, continue with:
-
-```bash
-curl http://127.0.0.1:8787/v1/responses \
-  -H 'content-type: application/json' \
-  -H 'authorization: Bearer local-dev-key' \
-  -d '{
-    "model": "qwen3-coder",
-    "previous_response_id": "resp_xxx",
-    "input": [{
-      "type": "function_call_output",
-      "call_id": "call_1",
-      "output": "北京今天晴，气温 12-20 摄氏度"
-    }]
-  }'
-```
-
-The adapter stitches prior input, prior model output, and the new tool result into the next upstream prompt.
-
-## Tool Execution Boundary
-
-The adapter does not execute business tools by default.
-
-Its job is to turn user-provided tool schemas into model-readable instructions, parse plain model text back into standard tool calls, and accept `function_call_output` items from the caller for continuation. Your agent runtime, application server, or client should execute the actual tools and send the results back.
-
 ## Development
 
 ```bash
-cargo fmt --check
-cargo check
+cargo fmt -- --check
 cargo test
+cargo build
 ```
 
-The project is intentionally kept as a single standalone Rust binary crate.
+## Boundaries
 
-## Current Boundaries
-
-Implemented:
-
-- Chat Completions, Messages, and Responses compatibility; Responses `stream: true` opens SSE immediately, sends in-progress keepalives, reasoning summary events, and final text/tool-call events.
-- Responses create, retrieve, input-items, cancel, and compact endpoints.
-- `previous_response_id` continuation, including DeepSeek Web chat-session reuse inside the running adapter process.
-- Top-level Responses `function_call` output and `function_call_output` continuation.
-- Basic `tool_choice` semantics: `auto`, `none`, `required`, named function, and `parallel_tool_calls` trimming.
-- Model aliases.
-- Adapter API-key authentication.
-- Per-request upstream base URL and API-key overrides.
-- DeepSeek Web controlled-browser login, cookie/localStorage capture, session save/read, PoW, completion, and text parsing.
-- One-click Codex setup: backup and write `~/.codex/config.toml` plus `auth.json` with Responses wire.
-- Codex request summary logging for model, stream flag, previous response, tool names, tool choice, input size, and redacted upstream options.
-- XML and tolerant JSON tool-call parsing.
-
-Not yet implemented:
-
-- True incremental streaming for Chat Completions / Messages.
-- True upstream token-by-token forwarding for Responses; current behavior keeps the SSE connection alive while the upstream request runs, then emits final reasoning/text/tool-call events.
-- Durable response storage beyond process memory.
+- The adapter does not execute user business tools.
+- The adapter reads only its own controlled browser profile for DeepSeek login capture.
+- `reasoning.encrypted_content` is a local opaque compatibility token, not OpenAI server-side encryption.
+- `json_schema` support covers common Structured Outputs constraints, not the complete JSON Schema specification.
+- DeepSeek Web depends on private web APIs and may require maintenance when the website changes.
 
 ## License
 
