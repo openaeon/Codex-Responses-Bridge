@@ -78,7 +78,11 @@ impl OpenAiCompatClient {
                     .map(ToOwned::to_owned)
             });
 
-        Ok(UpstreamResponse { text, reasoning })
+        Ok(UpstreamResponse {
+            text,
+            reasoning,
+            provider_session_id: None,
+        })
     }
 
     pub async fn list_models(

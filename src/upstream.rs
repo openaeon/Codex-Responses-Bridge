@@ -14,6 +14,7 @@ use crate::types::UnifiedRequest;
 pub struct UpstreamResponse {
     pub text: String,
     pub reasoning: Option<String>,
+    pub provider_session_id: Option<String>,
 }
 
 #[derive(Clone)]
@@ -27,6 +28,7 @@ pub struct UpstreamRequestOptions {
     pub base_url: Option<String>,
     pub api_key: Option<String>,
     pub deepseek_session: Option<String>,
+    pub provider_session_id: Option<String>,
 }
 
 impl UpstreamRequestOptions {
@@ -42,6 +44,7 @@ impl UpstreamRequestOptions {
                 .deepseek_session
                 .as_deref()
                 .is_some_and(|value| !value.trim().is_empty()),
+            provider_session_id: self.provider_session_id.as_deref(),
         }
     }
 }
@@ -51,6 +54,7 @@ pub struct RedactedUpstreamRequestOptions<'a> {
     pub base_url: Option<&'a str>,
     pub api_key_present: bool,
     pub deepseek_session_present: bool,
+    pub provider_session_id: Option<&'a str>,
 }
 
 impl fmt::Debug for RedactedUpstreamRequestOptions<'_> {
@@ -60,6 +64,7 @@ impl fmt::Debug for RedactedUpstreamRequestOptions<'_> {
             .field("base_url", &self.base_url)
             .field("api_key_present", &self.api_key_present)
             .field("deepseek_session_present", &self.deepseek_session_present)
+            .field("provider_session_id", &self.provider_session_id)
             .finish()
     }
 }

@@ -18,6 +18,7 @@ pub async fn complete(
     options: &UpstreamRequestOptions,
 ) -> Result<UpstreamResponse, AdapterError> {
     let session = raw_session_from_options(options)?;
+    let session = with_provider_session_id(session, options.provider_session_id.as_deref());
     let client = DeepSeekWebClient::new(session);
     let response = client
         .complete(&request.model, prompt)
@@ -47,7 +48,32 @@ pub async fn complete(
     Ok(UpstreamResponse {
         text: clean_output(&response.text),
         reasoning: response.reasoning,
+        provider_session_id: Some(response.session_id),
     })
+}
+
+fn with_provider_session_id(session: String, provider_session_id: Option<&str>) -> String {
+    let Some(provider_session_id) = provider_session_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return session;
+    };
+    let Ok(mut value) = serde_json::from_str::<Value>(&session) else {
+        return json!({
+            "cookie": session,
+            "last_session_id": provider_session_id,
+        })
+        .to_string();
+    };
+    if let Value::Object(object) = &mut value {
+        object.insert(
+            "last_session_id".to_string(),
+            Value::String(provider_session_id.to_string()),
+        );
+        return value.to_string();
+    }
+    session
 }
 
 pub fn model_list_with_status(

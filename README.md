@@ -386,9 +386,9 @@ The project is intentionally kept as a single standalone Rust binary crate.
 
 Implemented:
 
-- Chat Completions, Messages, and Responses compatibility; Responses `stream: true` has a minimal SSE event wrapper.
+- Chat Completions, Messages, and Responses compatibility; Responses `stream: true` opens SSE immediately, sends in-progress keepalives, reasoning summary events, and final text/tool-call events.
 - Responses create, retrieve, input-items, cancel, and compact endpoints.
-- `previous_response_id` continuation.
+- `previous_response_id` continuation, including DeepSeek Web chat-session reuse inside the running adapter process.
 - Top-level Responses `function_call` output and `function_call_output` continuation.
 - Basic `tool_choice` semantics: `auto`, `none`, `required`, named function, and `parallel_tool_calls` trimming.
 - Model aliases.
@@ -396,12 +396,13 @@ Implemented:
 - Per-request upstream base URL and API-key overrides.
 - DeepSeek Web controlled-browser login, cookie/localStorage capture, session save/read, PoW, completion, and text parsing.
 - One-click Codex setup: backup and write `~/.codex/config.toml` plus `auth.json` with Responses wire.
+- Codex request summary logging for model, stream flag, previous response, tool names, tool choice, input size, and redacted upstream options.
 - XML and tolerant JSON tool-call parsing.
 
 Not yet implemented:
 
 - True incremental streaming for Chat Completions / Messages.
-- True upstream incremental forwarding for Responses; current behavior wraps the completed response as SSE events.
+- True upstream token-by-token forwarding for Responses; current behavior keeps the SSE connection alive while the upstream request runs, then emits final reasoning/text/tool-call events.
 - Durable response storage beyond process memory.
 
 ## License

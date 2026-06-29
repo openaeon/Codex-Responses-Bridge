@@ -386,9 +386,9 @@ cargo test
 
 已实现：
 
-- Chat Completions、Messages、Responses 兼容；Responses `stream: true` 提供最小 SSE 事件包装。
+- Chat Completions、Messages、Responses 兼容；Responses `stream: true` 会立即建立 SSE、发送 in-progress 保活、reasoning summary 事件和最终文本/工具调用事件。
 - Responses create、retrieve、input-items、cancel、compact 端点。
-- `previous_response_id` 多轮续接。
+- `previous_response_id` 多轮续接，并在 adapter 进程内复用 DeepSeek Web chat session。
 - Responses 顶层 `function_call` 输出与 `function_call_output` 续接。
 - `tool_choice` 基础语义：`auto`、`none`、`required`、指定 function name，以及 `parallel_tool_calls` 裁剪。
 - 模型别名。
@@ -396,12 +396,13 @@ cargo test
 - 按请求覆盖上游 base URL 和 API key。
 - DeepSeek Web 受控浏览器登录、Cookie/localStorage 捕获、session 保存/读取、PoW、completion、文本解析。
 - Codex 一键配置：备份并写入 `~/.codex/config.toml` 和 `auth.json`，使用 Responses wire。
+- Codex 请求摘要日志：模型、stream、previous response、工具名、tool_choice、输入大小和脱敏上游选项。
 - XML 与容错 JSON 工具调用解析。
 
 暂未实现：
 
 - Chat Completions / Messages 的真实增量流式输出。
-- Responses 的真实上游增量转发；当前是完成后包装成 SSE 事件。
+- Responses 的真实上游 token-by-token 转发；当前是在上游请求期间保持 SSE 连接并发送保活，完成后输出最终 reasoning/text/tool-call 事件。
 - 进程内存之外的持久 response 存储。
 
 ## License

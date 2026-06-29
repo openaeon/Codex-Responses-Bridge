@@ -15,14 +15,16 @@ const TOOL_TAGS: &[(&str, &str)] = &[
 
 pub fn render_tool_protocol_prompt(tools: &[ToolDefinition]) -> String {
     let mut prompt = String::from(
-        "You have access to tools.\n\
-When a tool is needed, output exactly one XML tool call and no markdown:\n\n\
+        "Adapter tool-call protocol override.\n\
+The surrounding system prompt may describe native tool calls, but this model cannot call native tools directly.\n\
+When a tool is needed, output exactly one XML tool call and no markdown, explanation, or extra text:\n\n\
 <tool_call id=\"call_unique_id\" name=\"tool_name\">\n\
 {\"arg\":\"value\"}\n\
 </tool_call>\n\n\
 Rules:\n\
 - Use only tools listed below.\n\
 - The body must be valid JSON.\n\
+- Preserve the user's language when choosing arguments.\n\
 - If no tool is needed, answer normally.\n",
     );
     if tools.is_empty() {

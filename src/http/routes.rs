@@ -1,14 +1,19 @@
 use std::path::{Path as FsPath, PathBuf};
+use std::pin::Pin;
 use std::process::Command;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 
+use axum::body::Body;
 use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap};
 use axum::response::{Html, IntoResponse, Response};
 use axum::Json;
+use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::config::{update_local_config, LocalConfig};
@@ -889,7 +894,7 @@ pub async fn messages(
 pub async fn responses(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
-    Json(mut payload): Json<Value>,
+    Json(payload): Json<Value>,
 ) -> Result<Response, AdapterError> {
     tracing::info!(
         payload_keys = ?payload.as_object().map(|object| object.keys().cloned().collect::<Vec<_>>()),
@@ -901,20 +906,20 @@ pub async fn responses(
         .and_then(Value::as_bool)
         .unwrap_or(false);
     if stream {
-        payload["stream"] = Value::Bool(false);
+        return Ok(responses_streaming_sse(
+            state,
+            payload,
+            upstream_options_from_headers(&headers),
+        )?);
     }
     let body = handle_value(
         state,
         payload,
         WireMode::Responses,
-        upstream_options_from_headers(&headers),
+        &mut upstream_options_from_headers(&headers),
     )
     .await?;
-    if stream {
-        Ok(responses_sse(body))
-    } else {
-        Ok(Json(body).into_response())
-    }
+    Ok(Json(body).into_response())
 }
 
 pub async fn responses_retrieve(
@@ -1068,10 +1073,10 @@ async fn handle(
     state: Arc<AppState>,
     payload: Value,
     mode: WireMode,
-    upstream_options: UpstreamRequestOptions,
+    mut upstream_options: UpstreamRequestOptions,
 ) -> Result<Json<Value>, AdapterError> {
     Ok(Json(
-        handle_value(state, payload, mode, upstream_options).await?,
+        handle_value(state, payload, mode, &mut upstream_options).await?,
     ))
 }
 
@@ -1079,14 +1084,10 @@ async fn handle_value(
     state: Arc<AppState>,
     payload: Value,
     mode: WireMode,
-    upstream_options: UpstreamRequestOptions,
+    upstream_options: &mut UpstreamRequestOptions,
 ) -> Result<Value, AdapterError> {
     let mut request = UnifiedRequest::from_wire_payload(mode, payload)?;
-    tracing::info!(
-        "Received request with model={:?}, upstream_options={:?}",
-        request.model,
-        upstream_options.redacted()
-    );
+    log_codex_request_summary(mode, &request, upstream_options);
     if request.stream {
         return Err(AdapterError::StreamUnsupported);
     }
@@ -1094,6 +1095,7 @@ async fn handle_value(
         .then(|| responses_store::input_items_from_request(&request));
     if matches!(mode, WireMode::Responses) {
         prepend_previous_response_context(&state, &mut request)?;
+        attach_previous_provider_session(&state, &request, upstream_options);
     }
     if request.model.trim().is_empty() || request.model.trim() == "local-model" {
         request.model = state.config.upstream_model.clone();
@@ -1117,7 +1119,7 @@ async fn handle_value(
             let prompt = request.render_prompt_with_tool_protocol(&protocol);
             let upstream_response = state
                 .upstream
-                .complete(&request, &prompt, &upstream_options)
+                .complete(&request, &prompt, upstream_options)
                 .await?;
             if let Some(reasoning) = upstream_response.reasoning.as_deref() {
                 tracing::debug!(
@@ -1149,6 +1151,9 @@ async fn handle_value(
                 responses::function_call_items(&tool_calls)
             };
             let mut body = responses::response_from_output(&request, output, output_text);
+            if let Some(session_id) = upstream_response.provider_session_id.as_deref() {
+                body["_adapter_provider_session_id"] = Value::String(session_id.to_string());
+            }
             restore_external_model(&mut body, &external_model);
             body
         }
@@ -1156,7 +1161,7 @@ async fn handle_value(
             let prompt = request.render_prompt_with_tool_protocol(&protocol);
             let upstream_response = state
                 .upstream
-                .complete(&request, &prompt, &upstream_options)
+                .complete(&request, &prompt, upstream_options)
                 .await?;
             if let Some(reasoning) = upstream_response.reasoning.as_deref() {
                 tracing::debug!(
@@ -1181,69 +1186,174 @@ async fn handle_value(
     };
     if matches!(mode, WireMode::Responses) {
         let context_items = responses_store::input_items_from_request(&request);
-        state.responses.insert(
-            body.clone(),
+        state.responses.insert_with_provider_session(
+            strip_adapter_private_fields(&body),
             response_input_items.unwrap_or_else(|| context_items.clone()),
             context_items,
             request.background,
+            body.get("_adapter_provider_session_id")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
         );
     }
-    Ok(body)
+    Ok(strip_adapter_private_fields(&body))
 }
 
-fn responses_sse(body: Value) -> Response {
-    let mut stream = String::new();
-    let mut in_progress = body.clone();
-    in_progress["status"] = Value::String("in_progress".to_string());
-    in_progress["output"] = json!([]);
-
-    push_sse(
-        &mut stream,
-        "response.created",
-        json!({ "type": "response.created", "response": in_progress }),
-    );
-    push_sse(
-        &mut stream,
-        "response.in_progress",
-        json!({ "type": "response.in_progress", "response": body_without_output(&body) }),
-    );
-
-    for (index, item) in body
-        .get("output")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .enumerate()
-    {
-        push_sse(
-            &mut stream,
-            "response.output_item.added",
-            json!({
-                "type": "response.output_item.added",
-                "output_index": index,
-                "item": item,
-            }),
-        );
-        push_message_text_events(&mut stream, index, item);
-        push_sse(
-            &mut stream,
-            "response.output_item.done",
-            json!({
-                "type": "response.output_item.done",
-                "output_index": index,
-                "item": item,
-            }),
-        );
+fn responses_streaming_sse(
+    state: Arc<AppState>,
+    mut payload: Value,
+    mut upstream_options: UpstreamRequestOptions,
+) -> Result<Response, AdapterError> {
+    payload["stream"] = Value::Bool(false);
+    let mut request = UnifiedRequest::from_wire_payload(WireMode::Responses, payload)?;
+    log_codex_request_summary(WireMode::Responses, &request, &upstream_options);
+    let response_input_items = responses_store::input_items_from_request(&request);
+    prepend_previous_response_context(&state, &mut request)?;
+    attach_previous_provider_session(&state, &request, &mut upstream_options);
+    if request.model.trim().is_empty() || request.model.trim() == "local-model" {
+        request.model = state.config.upstream_model.clone();
     }
+    let external_model = request.model.clone();
+    if let Some(upstream_model) = state.config.model_alias_map().get(request.model.trim()) {
+        request.model = upstream_model.clone();
+    } else if should_route_to_default_deepseek_model(
+        &request.model,
+        &state.config.upstream_model,
+        &upstream_options,
+    ) {
+        request.model = state.config.upstream_model.clone();
+    }
+    tracing::info!("Mapped streaming request model to={:?}", request.model);
+    request.tools.truncate(state.config.max_tool_definitions);
 
-    push_sse(
-        &mut stream,
-        "response.completed",
-        json!({ "type": "response.completed", "response": body }),
-    );
-    stream.push_str("data: [DONE]\n\n");
+    let mut shell_response = responses::response_from_output(&request, Vec::new(), "");
+    shell_response["completed_at"] = Value::Null;
+    shell_response["status"] = Value::String("in_progress".to_string());
+    restore_external_model(&mut shell_response, &external_model);
 
-    ([(header::CONTENT_TYPE, "text/event-stream")], stream).into_response()
+    let (tx, rx) = mpsc::channel::<Result<Bytes, std::io::Error>>(64);
+    let stream_state = state.clone();
+    tokio::spawn(async move {
+        let mut sink = SseSink::new(tx);
+        sink.send_event(
+            "response.created",
+            json!({ "type": "response.created", "response": shell_response }),
+        )
+        .await;
+        sink.send_event(
+            "response.in_progress",
+            json!({ "type": "response.in_progress", "response": body_without_output(&shell_response) }),
+        )
+        .await;
+
+        let mut keepalive = tokio::time::interval(std::time::Duration::from_secs(2));
+        let protocol = render_tool_protocol_prompt(&request.tools);
+        let prompt = request.render_prompt_with_tool_protocol(&protocol);
+        let upstream = stream_state
+            .upstream
+            .complete(&request, &prompt, &upstream_options);
+        tokio::pin!(upstream);
+
+        let result = loop {
+            tokio::select! {
+                _ = keepalive.tick() => {
+                    sink.send_event(
+                        "response.in_progress",
+                        json!({
+                            "type": "response.in_progress",
+                            "response": body_without_output(&shell_response)
+                        }),
+                    ).await;
+                }
+                result = &mut upstream => break result,
+            }
+        };
+
+        match result {
+            Ok(upstream_response) => {
+                if let Some(reasoning) = upstream_response.reasoning.as_deref() {
+                    emit_reasoning_item(&mut sink, 0, reasoning).await;
+                }
+                let model_text = upstream_response.text;
+                let parsed_tool_calls = match apply_tool_choice_to_tool_calls(
+                    &request,
+                    &model_text,
+                    parse_tool_calls(&model_text),
+                ) {
+                    Ok(tool_calls) => constrain_parallel_tool_calls(&request, tool_calls),
+                    Err(error) => {
+                        emit_response_error(&mut sink, shell_response, error.to_string()).await;
+                        return;
+                    }
+                };
+                if parsed_tool_calls.is_empty() && request.tool_choice.requires_tool() {
+                    emit_response_error(
+                        &mut sink,
+                        shell_response,
+                        "tool_choice requires a tool call, but the upstream model returned text",
+                    )
+                    .await;
+                    return;
+                }
+
+                let provider_session_id = upstream_response.provider_session_id.clone();
+                let (output, output_text) = if parsed_tool_calls.is_empty() {
+                    (
+                        vec![responses::message_output_item(&model_text)],
+                        model_text.as_str(),
+                    )
+                } else {
+                    (responses::function_call_items(&parsed_tool_calls), "")
+                };
+                let mut completed = responses::response_from_output(&request, output, output_text);
+                completed["id"] = shell_response["id"].clone();
+                completed["created_at"] = shell_response["created_at"].clone();
+                restore_external_model(&mut completed, &external_model);
+                let public_completed = strip_adapter_private_fields(&completed);
+
+                for (index, item) in public_completed
+                    .get("output")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .enumerate()
+                {
+                    let output_index = if upstream_response.reasoning.is_some() {
+                        index + 1
+                    } else {
+                        index
+                    };
+                    emit_output_item(&mut sink, output_index, item).await;
+                }
+                sink.send_event(
+                    "response.completed",
+                    json!({ "type": "response.completed", "response": public_completed }),
+                )
+                .await;
+                sink.send_done().await;
+                let context_items = responses_store::input_items_from_request(&request);
+                stream_state.responses.insert_with_provider_session(
+                    public_completed,
+                    response_input_items,
+                    context_items,
+                    request.background,
+                    provider_session_id,
+                );
+            }
+            Err(error) => {
+                emit_response_error(&mut sink, shell_response, error.to_string()).await;
+            }
+        }
+    });
+
+    Ok((
+        [
+            (header::CONTENT_TYPE, "text/event-stream"),
+            (header::CACHE_CONTROL, "no-cache"),
+        ],
+        Body::from_stream(MpscByteStream { rx }),
+    )
+        .into_response())
 }
 
 fn body_without_output(body: &Value) -> Value {
@@ -1307,6 +1417,151 @@ fn push_message_text_events(stream: &mut String, output_index: usize, item: &Val
     }
 }
 
+struct MpscByteStream {
+    rx: mpsc::Receiver<Result<Bytes, std::io::Error>>,
+}
+
+impl futures_util::Stream for MpscByteStream {
+    type Item = Result<Bytes, std::io::Error>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        self.rx.poll_recv(cx)
+    }
+}
+
+struct SseSink {
+    tx: mpsc::Sender<Result<Bytes, std::io::Error>>,
+}
+
+impl SseSink {
+    fn new(tx: mpsc::Sender<Result<Bytes, std::io::Error>>) -> Self {
+        Self { tx }
+    }
+
+    async fn send_event(&mut self, event: &str, data: Value) {
+        let mut chunk = String::new();
+        push_sse(&mut chunk, event, data);
+        let _ = self.tx.send(Ok(Bytes::from(chunk))).await;
+    }
+
+    async fn send_done(&mut self) {
+        let _ = self
+            .tx
+            .send(Ok(Bytes::from_static(b"data: [DONE]\n\n")))
+            .await;
+    }
+}
+
+async fn emit_output_item(sink: &mut SseSink, output_index: usize, item: &Value) {
+    sink.send_event(
+        "response.output_item.added",
+        json!({
+            "type": "response.output_item.added",
+            "output_index": output_index,
+            "item": item,
+        }),
+    )
+    .await;
+    let mut text_events = String::new();
+    push_message_text_events(&mut text_events, output_index, item);
+    if !text_events.is_empty() {
+        let _ = sink.tx.send(Ok(Bytes::from(text_events))).await;
+    }
+    sink.send_event(
+        "response.output_item.done",
+        json!({
+            "type": "response.output_item.done",
+            "output_index": output_index,
+            "item": item,
+        }),
+    )
+    .await;
+}
+
+async fn emit_reasoning_item(sink: &mut SseSink, output_index: usize, reasoning: &str) {
+    let item = json!({
+        "id": format!("rs_{}", uuid::Uuid::new_v4()),
+        "type": "reasoning",
+        "status": "completed",
+        "summary": [{
+            "type": "summary_text",
+            "text": reasoning
+        }]
+    });
+    sink.send_event(
+        "response.output_item.added",
+        json!({
+            "type": "response.output_item.added",
+            "output_index": output_index,
+            "item": item,
+        }),
+    )
+    .await;
+    sink.send_event(
+        "response.reasoning_summary_part.added",
+        json!({
+            "type": "response.reasoning_summary_part.added",
+            "output_index": output_index,
+            "summary_index": 0,
+            "part": { "type": "summary_text", "text": "" }
+        }),
+    )
+    .await;
+    sink.send_event(
+        "response.reasoning_summary_text.delta",
+        json!({
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": output_index,
+            "summary_index": 0,
+            "delta": reasoning
+        }),
+    )
+    .await;
+    sink.send_event(
+        "response.reasoning_summary_text.done",
+        json!({
+            "type": "response.reasoning_summary_text.done",
+            "output_index": output_index,
+            "summary_index": 0,
+            "text": reasoning
+        }),
+    )
+    .await;
+    sink.send_event(
+        "response.reasoning_summary_part.done",
+        json!({
+            "type": "response.reasoning_summary_part.done",
+            "output_index": output_index,
+            "summary_index": 0,
+            "part": { "type": "summary_text", "text": reasoning }
+        }),
+    )
+    .await;
+    sink.send_event(
+        "response.output_item.done",
+        json!({
+            "type": "response.output_item.done",
+            "output_index": output_index,
+            "item": item,
+        }),
+    )
+    .await;
+}
+
+async fn emit_response_error(sink: &mut SseSink, mut response: Value, message: impl Into<String>) {
+    response["status"] = Value::String("failed".to_string());
+    response["error"] = json!({
+        "type": "adapter_error",
+        "message": message.into(),
+    });
+    sink.send_event(
+        "response.failed",
+        json!({ "type": "response.failed", "response": response }),
+    )
+    .await;
+    sink.send_done().await;
+}
+
 fn push_sse(stream: &mut String, event: &str, data: Value) {
     stream.push_str("event: ");
     stream.push_str(event);
@@ -1328,6 +1583,70 @@ fn should_route_to_default_deepseek_model(
             .as_deref()
             .is_none_or(|provider| provider.eq_ignore_ascii_case("deepseek-web"))
         && upstream_options.base_url.is_none()
+}
+
+fn log_codex_request_summary(
+    mode: WireMode,
+    request: &UnifiedRequest,
+    upstream_options: &UpstreamRequestOptions,
+) {
+    let tool_names = request
+        .tools
+        .iter()
+        .take(20)
+        .map(|tool| tool.name.as_str())
+        .collect::<Vec<_>>();
+    let input_chars: usize = request
+        .messages
+        .iter()
+        .map(|message| message.content_text().chars().count())
+        .sum();
+    tracing::info!(
+        mode = ?mode,
+        model = %request.model,
+        stream = request.stream,
+        previous_response_id = request.previous_response_id.as_deref(),
+        tool_count = request.tools.len(),
+        tool_names = ?tool_names,
+        tool_choice = ?request.tool_choice.to_wire_value(),
+        parallel_tool_calls = request.parallel_tool_calls,
+        input_messages = request.messages.len(),
+        input_chars,
+        upstream_options = ?upstream_options.redacted(),
+        "codex request summary"
+    );
+}
+
+fn attach_previous_provider_session(
+    state: &AppState,
+    request: &UnifiedRequest,
+    upstream_options: &mut UpstreamRequestOptions,
+) {
+    if upstream_options.provider_session_id.is_some() {
+        return;
+    }
+    let Some(previous_response_id) = request.previous_response_id.as_deref() else {
+        return;
+    };
+    if let Some(session_id) = state
+        .responses
+        .provider_session_id_for(previous_response_id)
+    {
+        tracing::info!(
+            previous_response_id,
+            provider_session_id = %session_id,
+            "reusing provider session from previous response"
+        );
+        upstream_options.provider_session_id = Some(session_id);
+    }
+}
+
+fn strip_adapter_private_fields(value: &Value) -> Value {
+    let mut value = value.clone();
+    if let Some(object) = value.as_object_mut() {
+        object.remove("_adapter_provider_session_id");
+    }
+    value
 }
 
 fn restore_external_model(body: &mut Value, external_model: &str) {
@@ -1406,6 +1725,7 @@ fn upstream_options_from_headers(headers: &HeaderMap) -> UpstreamRequestOptions 
         base_url: header_string(headers, "x-upstream-base-url"),
         api_key: header_string(headers, "x-upstream-api-key"),
         deepseek_session: header_string(headers, "x-deepseek-session"),
+        provider_session_id: header_string(headers, "x-provider-session-id"),
     }
 }
 

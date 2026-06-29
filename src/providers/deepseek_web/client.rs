@@ -26,6 +26,7 @@ struct DeepSeekSessionState {
 pub struct DeepSeekWebResponse {
     pub text: String,
     pub reasoning: Option<String>,
+    pub session_id: String,
 }
 
 #[derive(Clone)]
@@ -34,7 +35,7 @@ pub struct DeepSeekWebClient {
     cookie: String,
     bearer: Option<String>,
     user_agent: String,
-    last_session_id: Option<String>,
+    session_key_override: Option<String>,
 }
 
 impl fmt::Debug for DeepSeekWebClient {
@@ -43,7 +44,7 @@ impl fmt::Debug for DeepSeekWebClient {
             .field("cookie", &redact_secret(&self.cookie))
             .field("bearer", &self.bearer.as_deref().map(redact_secret))
             .field("user_agent", &self.user_agent)
-            .field("last_session_id", &self.last_session_id)
+            .field("session_key_override", &self.session_key_override)
             .finish_non_exhaustive()
     }
 }
@@ -71,7 +72,7 @@ impl DeepSeekWebClient {
             user_agent: options
                 .user_agent
                 .unwrap_or_else(|| DEFAULT_USER_AGENT.to_string()),
-            last_session_id: options.last_session_id.filter(|id| !id.trim().is_empty()),
+            session_key_override: options.last_session_id.filter(|id| !id.trim().is_empty()),
         }
     }
 
@@ -122,6 +123,7 @@ impl DeepSeekWebClient {
         Ok(DeepSeekWebResponse {
             text: output,
             reasoning: (!reasoning.trim().is_empty()).then(|| reasoning.trim().to_string()),
+            session_id: session_state.session_id,
         })
     }
 
@@ -174,7 +176,7 @@ impl DeepSeekWebClient {
     }
 
     fn session_key(&self) -> String {
-        self.last_session_id
+        self.session_key_override
             .clone()
             .unwrap_or_else(|| self.cookie.clone())
     }
@@ -191,7 +193,7 @@ impl DeepSeekWebClient {
             }
         }
 
-        if let Some(id) = &self.last_session_id {
+        if let Some(id) = &self.session_key_override {
             let state = DeepSeekSessionState {
                 session_id: id.clone(),
                 parent_message_id: None,
@@ -253,7 +255,7 @@ impl DeepSeekWebClient {
         map.entry(key)
             .and_modify(|state| state.parent_message_id = Some(parent_message_id.clone()))
             .or_insert_with(|| DeepSeekSessionState {
-                session_id: self.last_session_id.clone().unwrap_or_default(),
+                session_id: self.session_key_override.clone().unwrap_or_default(),
                 parent_message_id: Some(parent_message_id),
             });
     }

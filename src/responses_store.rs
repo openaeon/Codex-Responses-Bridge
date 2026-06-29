@@ -18,6 +18,7 @@ struct StoredResponse {
     context_items: Vec<Value>,
     output_items: Vec<Value>,
     background: bool,
+    provider_session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,12 +28,13 @@ pub enum StoreError {
 }
 
 impl ResponseStore {
-    pub fn insert(
+    pub fn insert_with_provider_session(
         &self,
         body: Value,
         input_items: Vec<Value>,
         context_items: Vec<Value>,
         background: bool,
+        provider_session_id: Option<String>,
     ) {
         let Some(id) = body
             .get("id")
@@ -55,8 +57,17 @@ impl ResponseStore {
                 context_items,
                 output_items,
                 background,
+                provider_session_id,
             },
         );
+    }
+
+    pub fn provider_session_id_for(&self, response_id: &str) -> Option<String> {
+        self.inner
+            .lock()
+            .expect("response store mutex poisoned")
+            .get(response_id)
+            .and_then(|entry| entry.provider_session_id.clone())
     }
 
     pub fn retrieve(&self, response_id: &str) -> Option<Value> {
@@ -269,7 +280,7 @@ mod tests {
     #[test]
     fn rejects_cancelling_non_background_response() {
         let store = ResponseStore::default();
-        store.insert(
+        store.insert_with_provider_session(
             json!({
                 "id": "resp_1",
                 "object": "response",
@@ -278,6 +289,7 @@ mod tests {
             vec![],
             vec![],
             false,
+            None,
         );
 
         assert_eq!(store.cancel("resp_1"), Err(StoreError::NotBackground));
@@ -286,7 +298,7 @@ mod tests {
     #[test]
     fn separates_current_input_items_from_context_items() {
         let store = ResponseStore::default();
-        store.insert(
+        store.insert_with_provider_session(
             json!({
                 "id": "resp_1",
                 "object": "response",
@@ -319,6 +331,7 @@ mod tests {
                 }),
             ],
             false,
+            Some("deepseek-session-a".to_string()),
         );
 
         let listed = store
@@ -330,6 +343,10 @@ mod tests {
         assert_eq!(context.len(), 3);
         assert_eq!(context[0]["id"], "msg_previous");
         assert_eq!(context[2]["id"], "msg_out");
+        assert_eq!(
+            store.provider_session_id_for("resp_1").as_deref(),
+            Some("deepseek-session-a")
+        );
     }
 
     #[test]
