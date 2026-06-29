@@ -129,16 +129,26 @@ pub(crate) fn function_call_items(tool_calls: &[ParsedToolCall]) -> Vec<Value> {
     tool_calls
         .iter()
         .map(|call| {
-            json!({
+            let mut item = json!({
                 "id": format!("fc_{}", Uuid::new_v4()),
                 "type": "function_call",
                 "status": "completed",
                 "call_id": call.id,
                 "name": call.name,
                 "arguments": call.arguments
-            })
+            });
+            if let Some(namespace) = codex_namespace_from_tool_name(&call.name) {
+                item["namespace"] = Value::String(namespace);
+            }
+            item
         })
         .collect()
+}
+
+fn codex_namespace_from_tool_name(name: &str) -> Option<String> {
+    name.strip_prefix("mcp__")
+        .and_then(|rest| rest.split_once("__"))
+        .map(|(namespace, _)| namespace.to_string())
 }
 
 fn response_tools(tools: &[ToolDefinition]) -> Value {
@@ -185,12 +195,7 @@ fn parse_input_item(item: &Value) -> Option<UnifiedMessage> {
                     .and_then(Value::as_str)
                     .unwrap_or("call_unknown")
                     .to_string(),
-                content: item
-                    .get("output")
-                    .and_then(Value::as_str)
-                    .map(ToOwned::to_owned)
-                    .or_else(|| item.get("output").map(Value::to_string))
-                    .unwrap_or_default(),
+                content: function_call_output_to_text(item.get("output")),
                 is_error: false,
             }],
         }),
@@ -219,6 +224,39 @@ fn parse_input_item(item: &Value) -> Option<UnifiedMessage> {
             })
         }
     }
+}
+
+fn function_call_output_to_text(output: Option<&Value>) -> String {
+    let Some(output) = output else {
+        return String::new();
+    };
+    if let Some(text) = output.as_str() {
+        return text.to_string();
+    }
+    if let Some(parts) = output.as_array() {
+        let text_parts = parts
+            .iter()
+            .filter_map(|part| {
+                let part_type = part.get("type").and_then(Value::as_str).unwrap_or_default();
+                match part_type {
+                    "input_text" | "output_text" | "text" => part
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .map(ToOwned::to_owned),
+                    "input_image" | "image_url" => part
+                        .get("image_url")
+                        .or_else(|| part.pointer("/image_url/url"))
+                        .and_then(Value::as_str)
+                        .map(|url| format!("[image: {url}]")),
+                    "encrypted_content" => Some("[encrypted_content]".to_string()),
+                    _ => Some(part.to_string()),
+                }
+            })
+            .filter(|part| !part.trim().is_empty())
+            .collect::<Vec<_>>();
+        return text_parts.join("\n");
+    }
+    output.to_string()
 }
 
 fn parse_message_content(value: Option<&Value>) -> Vec<UnifiedContent> {
@@ -367,6 +405,28 @@ mod tests {
     }
 
     #[test]
+    fn emits_codex_mcp_namespace_for_function_call() {
+        let request = parse_request(json!({
+            "model": "m",
+            "input": "hi"
+        }))
+        .unwrap();
+        let body = response(
+            &request,
+            "",
+            &[ParsedToolCall {
+                id: "call_a".to_string(),
+                name: "mcp__node_repl__js".to_string(),
+                arguments: r#"{"code":"1+1"}"#.to_string(),
+            }],
+        );
+
+        assert_eq!(body["output"][0]["type"], "function_call");
+        assert_eq!(body["output"][0]["name"], "mcp__node_repl__js");
+        assert_eq!(body["output"][0]["namespace"], "node_repl");
+    }
+
+    #[test]
     fn emits_reasoning_as_separate_output_item() {
         let item = reasoning_output_item("thinking only");
 
@@ -420,5 +480,29 @@ mod tests {
 
         assert!(request.messages[0].content_text().contains(r#""q":"rs""#));
         assert!(request.messages[1].content_text().contains(r#""ok":true"#));
+    }
+
+    #[test]
+    fn parses_codex_structured_function_call_output_as_readable_text() {
+        let request = parse_request(json!({
+            "model": "m",
+            "input": [
+                {
+                    "type":"function_call_output",
+                    "call_id":"call_a",
+                    "output":[
+                        {"type":"input_text","text":"line one"},
+                        {"type":"input_image","image_url":"data:image/png;base64,AAA"},
+                        {"type":"encrypted_content","encrypted_content":"opaque"}
+                    ]
+                }
+            ]
+        }))
+        .unwrap();
+        let text = request.messages[0].content_text();
+
+        assert!(text.contains("line one"));
+        assert!(text.contains("[image: data:image/png;base64,AAA]"));
+        assert!(text.contains("[encrypted_content]"));
     }
 }

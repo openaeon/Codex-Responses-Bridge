@@ -1791,6 +1791,21 @@ impl SseSink {
 }
 
 async fn emit_output_item(sink: &mut SseSink, output_index: usize, item: &Value) {
+    let item_type = item
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let item_id = item.get("id").and_then(Value::as_str);
+    let call_id = item.get("call_id").and_then(Value::as_str);
+    let tool_name = item.get("name").and_then(Value::as_str);
+    tracing::info!(
+        output_index,
+        item_type,
+        item_id,
+        call_id,
+        tool_name,
+        "responses sse output item emit"
+    );
     sink.send_event(
         "response.output_item.added",
         json!({
@@ -1805,12 +1820,60 @@ async fn emit_output_item(sink: &mut SseSink, output_index: usize, item: &Value)
     if !text_events.is_empty() {
         let _ = sink.tx.send(Ok(Bytes::from(text_events))).await;
     }
+    if item.get("type").and_then(Value::as_str) == Some("function_call") {
+        emit_function_call_argument_events(sink, output_index, item).await;
+    }
     sink.send_event(
         "response.output_item.done",
         json!({
             "type": "response.output_item.done",
             "output_index": output_index,
             "item": item,
+        }),
+    )
+    .await;
+}
+
+async fn emit_function_call_argument_events(sink: &mut SseSink, output_index: usize, item: &Value) {
+    let item_id = item.get("id").and_then(Value::as_str).unwrap_or_default();
+    let call_id = item
+        .get("call_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let arguments = item
+        .get("arguments")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if arguments.is_empty() {
+        return;
+    }
+    tracing::info!(
+        output_index,
+        item_id,
+        call_id,
+        argument_chars = arguments.chars().count(),
+        arguments_preview = %truncate_for_log(arguments, 240),
+        "responses sse function arguments emit"
+    );
+    sink.send_event(
+        "response.function_call_arguments.delta",
+        json!({
+            "type": "response.function_call_arguments.delta",
+            "output_index": output_index,
+            "item_id": item_id,
+            "call_id": call_id,
+            "delta": arguments,
+        }),
+    )
+    .await;
+    sink.send_event(
+        "response.function_call_arguments.done",
+        json!({
+            "type": "response.function_call_arguments.done",
+            "output_index": output_index,
+            "item_id": item_id,
+            "call_id": call_id,
+            "arguments": arguments,
         }),
     )
     .await;
