@@ -176,9 +176,32 @@ pub fn response_store_path() -> Result<PathBuf, std::io::Error> {
 }
 
 pub fn adapter_data_dir() -> Result<PathBuf, std::io::Error> {
-    let home = std::env::var_os("HOME")
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "HOME is not set"))?;
-    Ok(PathBuf::from(home).join(".model-toolcall-adapter"))
+    if cfg!(windows) {
+        if let Some(path) = std::env::var_os("APPDATA") {
+            return Ok(PathBuf::from(path).join("model-toolcall-adapter"));
+        }
+    }
+    Ok(user_home_dir()?.join(".model-toolcall-adapter"))
+}
+
+pub fn user_home_dir() -> Result<PathBuf, std::io::Error> {
+    if let Some(home) = std::env::var_os("HOME") {
+        return Ok(PathBuf::from(home));
+    }
+    if let Some(profile) = std::env::var_os("USERPROFILE") {
+        return Ok(PathBuf::from(profile));
+    }
+    match (std::env::var_os("HOMEDRIVE"), std::env::var_os("HOMEPATH")) {
+        (Some(drive), Some(path)) => {
+            let mut home = PathBuf::from(drive);
+            home.push(path);
+            Ok(home)
+        }
+        _ => Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "cannot determine user home directory from HOME or USERPROFILE",
+        )),
+    }
 }
 
 pub fn update_local_config(
@@ -201,7 +224,7 @@ fn choose_string(value: String, env_name: &str, local_value: String) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{local_config_path, AppConfig, LocalConfig};
+    use super::{local_config_path, user_home_dir, AppConfig, LocalConfig};
     use std::sync::Mutex;
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -245,5 +268,28 @@ mod tests {
 
         let _ = std::fs::remove_file(&path);
         std::env::remove_var("ADAPTER_CONFIG_FILE");
+    }
+
+    #[test]
+    fn user_home_dir_falls_back_to_userprofile() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let old_home = std::env::var_os("HOME");
+        let old_userprofile = std::env::var_os("USERPROFILE");
+        std::env::remove_var("HOME");
+        std::env::set_var("USERPROFILE", r"C:\Users\adapter");
+
+        assert_eq!(
+            user_home_dir().unwrap(),
+            std::path::PathBuf::from(r"C:\Users\adapter")
+        );
+
+        if let Some(value) = old_home {
+            std::env::set_var("HOME", value);
+        }
+        if let Some(value) = old_userprofile {
+            std::env::set_var("USERPROFILE", value);
+        } else {
+            std::env::remove_var("USERPROFILE");
+        }
     }
 }

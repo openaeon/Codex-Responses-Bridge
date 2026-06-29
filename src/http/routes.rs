@@ -19,7 +19,7 @@ use serde_json::{json, Value};
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
 
-use crate::config::{update_local_config, LocalConfig};
+use crate::config::{adapter_data_dir, update_local_config, user_home_dir, LocalConfig};
 use crate::error::AdapterError;
 use crate::http::{AppState, DeepSeekBrowserProcess};
 use crate::protocol::{parse_tool_calls, render_tool_protocol_prompt};
@@ -268,10 +268,8 @@ fn save_deepseek_session(path: &FsPath, session: &str) -> Result<(), AdapterErro
 }
 
 fn deepseek_login_log_path() -> Result<std::path::PathBuf, AdapterError> {
-    let home = std::env::var_os("HOME")
-        .ok_or_else(|| AdapterError::Upstream("HOME is not set".to_string()))?;
-    Ok(std::path::PathBuf::from(home)
-        .join(".model-toolcall-adapter")
+    Ok(adapter_data_dir()
+        .map_err(|error| AdapterError::Upstream(error.to_string()))?
         .join("deepseek_login_adapter.log"))
 }
 
@@ -415,9 +413,7 @@ fn find_browser_on_path() -> Option<PathBuf> {
 }
 
 fn adapter_home_dir() -> Result<PathBuf, AdapterError> {
-    let home = std::env::var_os("HOME")
-        .ok_or_else(|| AdapterError::Upstream("HOME is not set".to_string()))?;
-    Ok(PathBuf::from(home).join(".model-toolcall-adapter"))
+    adapter_data_dir().map_err(|error| AdapterError::Upstream(error.to_string()))
 }
 
 async fn capture_deepseek_session(port: u16) -> Result<String, AdapterError> {
@@ -663,9 +659,9 @@ fn codex_home_dir() -> Result<PathBuf, AdapterError> {
     if let Some(path) = std::env::var_os("CODEX_HOME") {
         return Ok(PathBuf::from(path));
     }
-    let home = std::env::var_os("HOME")
-        .ok_or_else(|| AdapterError::Upstream("HOME is not set".to_string()))?;
-    Ok(PathBuf::from(home).join(".codex"))
+    Ok(user_home_dir()
+        .map_err(|error| AdapterError::Upstream(error.to_string()))?
+        .join(".codex"))
 }
 
 fn backup_file(path: &FsPath) -> Result<Option<PathBuf>, AdapterError> {

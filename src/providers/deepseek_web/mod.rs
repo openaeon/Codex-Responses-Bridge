@@ -7,6 +7,7 @@ use serde_json::{json, Value};
 
 pub use client::{DeepSeekStreamEvent, DeepSeekWebClient};
 
+use crate::config::adapter_data_dir;
 use crate::error::AdapterError;
 use crate::providers::alias_model_items;
 use crate::types::UnifiedRequest;
@@ -205,10 +206,8 @@ pub fn default_session_path() -> Result<PathBuf, AdapterError> {
     if let Some(path) = std::env::var_os("ADAPTER_DEEPSEEK_SESSION_FILE") {
         return Ok(PathBuf::from(path));
     }
-    let home = std::env::var_os("HOME")
-        .ok_or_else(|| AdapterError::Upstream("HOME is not set".to_string()))?;
-    Ok(PathBuf::from(home)
-        .join(".model-toolcall-adapter")
+    Ok(adapter_data_dir()
+        .map_err(|error| AdapterError::Upstream(error.to_string()))?
         .join("deepseek_session.json"))
 }
 
