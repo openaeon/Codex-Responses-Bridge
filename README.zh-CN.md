@@ -1,57 +1,86 @@
+<div align="center">
+
 # model-toolcall-adapter-rs
 
-[English](README.md) | [简体中文](README.zh-CN.md)
+**把不会工具调用的模型，接成 Codex / OpenAI / Anthropic 能用的标准工具接口。**
 
-> 一个本地协议适配器：把“不原生支持工具调用”的上游模型，包装成 Codex / OpenAI / Anthropic 客户端能识别的标准工具调用接口。
+[English](README.md) · [简体中文](README.zh-CN.md)
 
-当前发布版本：`v0.2.0`
+![release](https://img.shields.io/badge/release-v0.2.0-1f6feb)
+![rust](https://img.shields.io/badge/Rust-2021-b7410e)
+![responses](https://img.shields.io/badge/OpenAI-Responses-111827)
+![deepseek](https://img.shields.io/badge/DeepSeek-Web-2563eb)
+![license](https://img.shields.io/badge/license-MIT-16a34a)
 
-这个项目不执行用户工具，也不试图做一个完整 agent runtime。它只解决一个明确问题：
+</div>
+
+---
+
+## 项目定位
+
+`model-toolcall-adapter-rs` 是一个本地协议桥。它接收标准 `tools`，把工具定义转换成普通模型能理解的文本协议，再把模型输出的工具意图解析回标准 `function_call` / `tool_calls`。
+
+它不执行用户工具，也不试图替代 agent runtime。真实工具仍由 Codex、客户端、后端服务或业务 runtime 执行。
 
 ```text
-客户端传入标准 tools
-→ adapter 把工具定义转成上游模型能理解的文本协议
-→ 上游模型按普通文本输出工具意图
-→ adapter 把文本工具意图解析成标准 function_call / tool_calls
-→ 客户端或业务 runtime 执行工具并回传结果
+标准 tools 请求
+    -> 文本工具协议
+    -> 上游普通模型
+    -> 文本工具意图
+    -> 标准 function_call / tool_calls
 ```
 
-这条边界很重要。adapter 负责“让模型说出标准工具调用”，真实工具仍由你的 Codex、客户端、后端服务或业务 runtime 执行。
+<table>
+  <tr>
+    <td><strong>对外接口</strong><br/>Responses、Chat Completions、Messages</td>
+    <td><strong>上游类型</strong><br/>OpenAI-compatible、本地模型、DeepSeek Web</td>
+  </tr>
+  <tr>
+    <td><strong>核心边界</strong><br/>只适配工具调用，不执行工具</td>
+    <td><strong>当前版本</strong><br/><code>v0.2.0</code></td>
+  </tr>
+</table>
 
-## 适合什么场景
+<p align="center">
+  <img src="docs/assets/setup-wizard.png" alt="model-toolcall-adapter-rs 启动向导" width="820">
+</p>
 
-适合：
+## 快速入口
 
-- 你有一个代码/推理能力不错的模型，但它不稳定支持 OpenAI function calling。
-- 你要把 DeepSeek Web、Ollama、vLLM、LM Studio、llama.cpp 等上游接到 Codex 风格客户端。
-- 你的客户端已经会传 OpenAI `tools`，但上游只能返回普通文本。
-- 你需要 OpenAI Responses、Chat Completions、Anthropic Messages 三种入口做协议桥接。
-
-不适合：
-
-- 你想让 adapter 直接执行 shell、浏览器、数据库或业务函数。
-- 你需要 OpenAI 托管 `file_search` / vector store 的完整替代品。
-- 你需要完全等价的 OpenAI 服务端 Structured Outputs / 加密 reasoning token。
-- 你希望多个远程服务节点共享同一套 response 状态。当前状态存储是本机文件级别。
-
-## 当前能力
-
-| 能力 | 状态 |
+| 我想做什么 | 入口 |
 | --- | --- |
-| OpenAI Chat Completions | 支持 `POST /v1/chat/completions` |
-| OpenAI Responses | 支持 create / retrieve / delete / input_items / input_tokens / cancel / compact |
-| Conversations | 支持 create / retrieve / update / delete / items |
-| Anthropic Messages | 支持 `POST /v1/messages` 形态 |
-| 工具调用适配 | 将普通文本中的 XML / JSON / 容错格式解析成标准工具调用 |
-| 工具执行 | 不执行，只返回标准工具调用，等待调用方回传 tool output |
-| Streaming | Responses 支持真实 SSE 增量；Chat / Messages 暂未做真实增量 |
-| Long task | Responses `background: true` 可 retrieve 轮询和 cancel |
-| Structured output | 支持 `json_object` 和常见递归 `json_schema` 校验，不是完整 JSON Schema 引擎 |
-| Reasoning | 支持 reasoning/text 分离；`reasoning.encrypted_content` 为本地 opaque 占位/透传 |
-| 图片/文件 | 支持标准 input image/file；DeepSeek Web provider 会上传并转成私有引用 |
-| DeepSeek Web | 支持受控浏览器登录、session 捕获、PoW、SSE 解析、搜索/思考/专家/识图模式映射 |
-| Codex | 支持一键备份并写入 `~/.codex/config.toml` 和 `auth.json` |
-| 本地状态 | response/conversation JSON 持久化，带 lock 文件和原子替换 |
+| 直接跑起来 | [启动](#启动) |
+| 配置 Codex | [接入 Codex](#接入-codex) |
+| 登录 DeepSeek Web | [DeepSeek Web](#deepseek-web) |
+| 看请求示例 | [API 示例](#api-示例) |
+| 找环境变量 | [配置](#配置) |
+| 下载/校验包 | [使用发行包](#使用发行包) |
+| 自己打包 | [打包](#打包) |
+| 看能力边界 | [边界](#边界) |
+
+## 适用场景
+
+| 适合 | 不适合 |
+| --- | --- |
+| 上游模型会推理，但不稳定支持 function calling | 让 adapter 直接执行 shell、浏览器、数据库或业务函数 |
+| 把 DeepSeek Web / Ollama / vLLM / LM Studio 接入 Codex 风格客户端 | 替代 OpenAI 托管 `file_search` / vector store |
+| 客户端已经会传 OpenAI `tools`，上游只能返回普通文本 | 完全等价实现 OpenAI 服务端 Structured Outputs / 加密 reasoning token |
+| 同时暴露 Responses、Chat Completions、Messages 三种入口 | 多个远程服务节点共享同一套 response 状态 |
+
+## 能力概览
+
+| 模块 | 已支持 | 说明 |
+| --- | --- | --- |
+| Wire API | Responses / Chat Completions / Messages | 面向 Codex、OpenAI-compatible 客户端和 Anthropic 风格请求 |
+| Tool calls | XML / JSON / 容错文本解析 | 产出标准工具调用，不执行工具 |
+| Responses state | retrieve / delete / input_items / input_tokens / cancel / compact | 支持 `previous_response_id` 与 Conversations |
+| Streaming | Responses SSE | Chat / Messages 暂未做真实增量 |
+| Long task | `background: true` | 可 retrieve 轮询和 cancel |
+| Structured output | `json_object` / 常见递归 `json_schema` | 不是完整 JSON Schema 引擎 |
+| Reasoning | reasoning/text 分离 | `reasoning.encrypted_content` 是本地 opaque 占位/透传 |
+| DeepSeek Web | 登录、session、PoW、SSE、上传 | 支持搜索、思考、专家、识图/文件通道映射 |
+| Codex | 一键配置 | 备份并写入 `~/.codex/config.toml` 和 `auth.json` |
+| 本地状态 | JSON + lock + 原子替换 | 降低异常退出或多个本地进程造成的损坏风险 |
 
 ## 架构
 
@@ -97,11 +126,7 @@ cd model-toolcall-adapter-rs
 cargo run
 ```
 
-打开：
-
-```text
-http://127.0.0.1:8787/ui
-```
+启动后打开 `http://127.0.0.1:8787/ui`。
 
 端口占用时：
 
@@ -124,7 +149,8 @@ dist/packages/
 
 `SHA256SUMS.txt` 用于校验四个平台压缩包。仓库只提交压缩发行包和校验文件，不提交解压后的临时工作目录。
 
-Windows：
+<details>
+<summary>Windows</summary>
 
 ```powershell
 Expand-Archive .\model-toolcall-adapter-rs-v0.2.0-windows-x64-exe.zip
@@ -134,7 +160,10 @@ cd .\model-toolcall-adapter-rs-windows-x64-exe\model-toolcall-adapter-rs-windows
 
 Windows 终端不会自动从当前目录查找程序，必须带 `.\` 前缀。
 
-macOS：
+</details>
+
+<details>
+<summary>macOS</summary>
 
 ```bash
 tar -xzf model-toolcall-adapter-rs-v0.2.0-macos-arm64.tar.gz
@@ -143,7 +172,10 @@ chmod +x ./model-toolcall-adapter-rs
 ./model-toolcall-adapter-rs
 ```
 
-Linux：
+</details>
+
+<details>
+<summary>Linux</summary>
 
 ```bash
 tar -xzf model-toolcall-adapter-rs-v0.2.0-linux-x64-server.tar.gz
@@ -152,7 +184,9 @@ chmod +x ./model-toolcall-adapter-rs
 ./model-toolcall-adapter-rs
 ```
 
-## 首次配置
+</details>
+
+## 上手路径
 
 首次启动会创建本地配置：
 
@@ -168,9 +202,7 @@ chmod +x ./model-toolcall-adapter-rs
 2. 如果选择 DeepSeek Web，启动受控浏览器并登录 `https://chat.deepseek.com/`。
 3. 捕获 session，查看 Base URL、Adapter Key、模型名和请求示例。
 
-截图：
-
-![启动向导](docs/assets/setup-wizard.png)
+启动向导会展示 Adapter Base URL、Adapter Key、模型名和请求示例，便于直接复制到 Codex 或其他客户端。
 
 ## 接入 Codex
 
