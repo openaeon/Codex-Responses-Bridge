@@ -1,0 +1,4 @@
+957ba5e36177d6ada3e593343eafec29366f72d31b2d4bd8825b9f2674c1a4dc  model-toolcall-adapter-rs-v0.2.0-linux-arm64-server.tar.gz
+62ae176eade1e63d03eefb635ea5dd57ec7d9cf7bedb35de769a0dff922f4b5e  model-toolcall-adapter-rs-v0.2.0-linux-x64-server.tar.gz
+cee759f75a73680e25fd47a9130166095f10f8c98aee8b3ea1776f723f5adb0d  model-toolcall-adapter-rs-v0.2.0-macos-arm64.tar.gz
+546a35324eb66a54e248964da30b53249ffe273b643edd685f3b9091787ada02  model-toolcall-adapter-rs-v0.2.0-windows-x64-exe.zip
