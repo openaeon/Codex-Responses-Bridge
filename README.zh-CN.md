@@ -2,9 +2,9 @@
 
 把不原生支持工具调用的模型，桥接成 Codex、OpenAI SDK、Anthropic 风格客户端能使用的标准工具调用接口。
 
-`v0.2.0` · Rust 2021 · 本地优先 · Responses / Chat Completions / Messages · DeepSeek Web
+`v3.0` · Rust 2021 · 本地优先 · Responses / Chat Completions / Messages · DeepSeek Web
 
-[English](README.md) · [下载 v0.2.0](https://github.com/openaeon/model-toolcall-adapter-rs/releases/tag/v0.2.0) · [架构说明](docs/ARCHITECTURE.zh-CN.md)
+[English](README.md) · [下载 v3.0](https://github.com/openaeon/Codex-Responses-Bridge/releases/tag/v3.0) · [架构说明](docs/ARCHITECTURE.zh-CN.md)
 
 ## 它解决什么问题
 
@@ -28,16 +28,16 @@
 
 | 系统 | 下载文件 | 适用场景 |
 | --- | --- | --- |
-| Windows x64 | `model-toolcall-adapter-rs-v0.2.0-windows-x64-exe.zip` | Windows 桌面或服务器 |
-| macOS Apple Silicon | `model-toolcall-adapter-rs-v0.2.0-macos-arm64.tar.gz` | M1 / M2 / M3 / M4 Mac |
-| Linux x64 | `model-toolcall-adapter-rs-v0.2.0-linux-x64-server.tar.gz` | 常见 x86_64 Linux 服务器 |
-| Linux ARM64 | `model-toolcall-adapter-rs-v0.2.0-linux-arm64-server.tar.gz` | ARM64 Linux 服务器 |
+| Windows x64 | `model-toolcall-adapter-rs-v3.0-windows-x64-exe.zip` | Windows 桌面或服务器 |
+| macOS Apple Silicon | `model-toolcall-adapter-rs-v3.0-macos-arm64.tar.gz` | M1 / M2 / M3 / M4 Mac |
+| Linux x64 | `model-toolcall-adapter-rs-v3.0-linux-x64-server.tar.gz` | 常见 x86_64 Linux 服务器 |
+| Linux ARM64 | `model-toolcall-adapter-rs-v3.0-linux-arm64-server.tar.gz` | ARM64 Linux 服务器 |
 | 校验文件 | `SHA256SUMS.txt` | 校验下载包完整性 |
 
 Release 地址：
 
 ```text
-https://github.com/openaeon/model-toolcall-adapter-rs/releases/tag/v0.2.0
+https://github.com/openaeon/Codex-Responses-Bridge/releases/tag/v3.0
 ```
 
 ## 三步跑起来
@@ -47,7 +47,7 @@ https://github.com/openaeon/model-toolcall-adapter-rs/releases/tag/v0.2.0
 Windows PowerShell：
 
 ```powershell
-Expand-Archive .\model-toolcall-adapter-rs-v0.2.0-windows-x64-exe.zip
+Expand-Archive .\model-toolcall-adapter-rs-v3.0-windows-x64-exe.zip
 cd .\model-toolcall-adapter-rs-windows-x64
 .\model-toolcall-adapter-rs.exe
 ```
@@ -62,7 +62,7 @@ model-toolcall-adapter-rs.exe
 macOS：
 
 ```bash
-tar -xzf model-toolcall-adapter-rs-v0.2.0-macos-arm64.tar.gz
+tar -xzf model-toolcall-adapter-rs-v3.0-macos-arm64.tar.gz
 cd model-toolcall-adapter-rs-macos-arm64
 chmod +x ./model-toolcall-adapter-rs
 ./model-toolcall-adapter-rs
@@ -71,7 +71,7 @@ chmod +x ./model-toolcall-adapter-rs
 Linux x64：
 
 ```bash
-tar -xzf model-toolcall-adapter-rs-v0.2.0-linux-x64-server.tar.gz
+tar -xzf model-toolcall-adapter-rs-v3.0-linux-x64-server.tar.gz
 cd model-toolcall-adapter-rs-linux-x64
 chmod +x ./model-toolcall-adapter-rs
 ./model-toolcall-adapter-rs
@@ -80,7 +80,7 @@ chmod +x ./model-toolcall-adapter-rs
 Linux ARM64：
 
 ```bash
-tar -xzf model-toolcall-adapter-rs-v0.2.0-linux-arm64-server.tar.gz
+tar -xzf model-toolcall-adapter-rs-v3.0-linux-arm64-server.tar.gz
 cd model-toolcall-adapter-rs-linux-arm64
 chmod +x ./model-toolcall-adapter-rs
 ./model-toolcall-adapter-rs

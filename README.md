@@ -2,6 +2,8 @@
 
 把本地模型、OpenAI-compatible 上游、DeepSeek Web 这类非标准上游，接到 Codex 能理解的 Responses 工作流里。
 
+`v3.0` · Rust 2021 · 本地优先 · Responses / Chat Completions / Messages · DeepSeek Web
+
 它不是普通聊天反代。普通反代通常解决“请求能发出去、文本能回来”；这个项目解决“Codex 能不能继续跑工具、续接上下文、理解流式事件，并且不被假能力误导”。
 
 ```text
@@ -311,8 +313,8 @@ docs/
 
 ## 当前状态
 
-项目正在从旧名 `model-toolcall-adapter-rs` 过渡到 `codex-responses-bridge`。当前 README 先按新定位整理；crate 名、配置目录、历史文档等正式改名项后续再收口。
+`v3.0` 起，项目按 `Codex Responses Bridge` 这个新定位组织 README 和能力边界。crate 名、配置目录、历史文档等兼容旧名的部分会逐步收口。
 
 更细的机制说明见 [docs/RESPONSES_MECHANISM.zh-CN.md](docs/RESPONSES_MECHANISM.zh-CN.md)。
 
-`Cargo.toml` 当前声明 `license = "MIT"`；仓库根目录尚未包含独立 `LICENSE` 文件。
+Cargo 包版本按 SemVer 写作 `3.0.0`。`Cargo.toml` 当前声明 `license = "MIT"`；仓库根目录尚未包含独立 `LICENSE` 文件。
