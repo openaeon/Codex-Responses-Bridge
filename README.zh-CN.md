@@ -144,6 +144,19 @@ http://127.0.0.1:8787/ui
 | 客户端已经会传 OpenAI `tools`，上游只能返回普通文本 | 完全等价实现 OpenAI 服务端 Structured Outputs |
 | 同时暴露 Responses、Chat Completions、Messages 三种入口 | 多个远程服务节点共享同一套 response 状态 |
 
+## Codex 内置浏览器与官方搜索边界
+
+官方原生 Responses API 能驱动 `web_search`、`web_search_preview`、`file_search`、`code_interpreter`、`computer_use`、MCP hosted tools 等服务端工具，是因为 OpenAI 服务端拥有对应的执行环境。当前 adapter 没有这个服务端环境，也不会伪造这些工具结果。
+
+| 场景 | 当前结果 |
+| --- | --- |
+| Codex 通过官方原生 API 使用内置浏览器或搜索 | 可以，由官方服务端执行 |
+| 请求里只有 `web_search_preview` / `web_search` 等 hosted tools | adapter 返回明确错误 |
+| 本地模型想搜索或操作浏览器 | 需要客户端/runtime 提供 `type:"function"` 工具，例如 `search_web`、`browser_open`、`browser_click` |
+| DeepSeek Web 内部联网搜索 | 属于 DeepSeek Web 上游能力，不等同于 Codex 内置浏览器 |
+
+也就是说，adapter 能桥接客户端明确暴露的 function tools；不能让本地模型自动拥有 Codex 官方浏览器。
+
 ## 接入 Codex
 
 启动向导第三步可以一键写入 Codex 配置。写入前会备份：
@@ -325,7 +338,7 @@ curl -X POST http://127.0.0.1:8787/v1/responses/resp_xxx/cancel \
   -H 'authorization: Bearer adp_xxx'
 ```
 
-## 图片、文件与本地 file_search
+## 图片、文件与官方 file_search 边界
 
 外部请求继续使用标准 Responses 格式：
 
@@ -345,7 +358,7 @@ curl -X POST http://127.0.0.1:8787/v1/responses/resp_xxx/cancel \
 
 DeepSeek Web provider 会在内部上传附件并轮询解析状态，再把上传得到的 id 传给 DeepSeek。专家模式不直接支持文件引用；带文件请求会先走识图或文件通道解析，再桥接到合适的模型模式。
 
-Responses `tools:[{"type":"file_search"}]` 当前只搜索本次请求内可读的 `input_file.file_data` 文本，不读取任意本地文件，也不是持久向量库。
+Responses `tools:[{"type":"file_search"}]` 是 OpenAI hosted/server-side tool。adapter 不执行、不伪造它；如果需要搜索文件，请把文件搜索能力作为客户端可执行的 `type:"function"` 工具传入。
 
 ## 配置
 

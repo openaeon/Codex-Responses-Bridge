@@ -22,8 +22,9 @@ pub fn parse_request(payload: Value) -> Result<UnifiedRequest, AdapterError> {
         .get("stream")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let tools = parse_tools(payload.get("tools"));
     let tool_choice = parse_tool_choice(payload.get("tool_choice"));
+    let tools = parse_tools(payload.get("tools"));
+    reject_hosted_only_tools(payload.get("tools"), &tools, &tool_choice)?;
     let parallel_tool_calls = payload
         .get("parallel_tool_calls")
         .and_then(Value::as_bool)
@@ -163,6 +164,41 @@ mod tests {
             "search"
         );
     }
+
+    #[test]
+    fn rejects_hosted_only_tools_instead_of_silently_dropping_them() {
+        let error = parse_request(json!({
+            "model": "m",
+            "messages": [{"role":"user","content":"搜索一下"}],
+            "tools": [{"type":"web_search_preview"}]
+        }))
+        .unwrap_err();
+
+        assert!(error.to_string().contains("Codex built-in browser/search"));
+    }
+
+    #[test]
+    fn ignores_hosted_tools_when_client_function_tools_are_available() {
+        let request = parse_request(json!({
+            "model": "m",
+            "messages": [{"role":"user","content":"搜索一下"}],
+            "tools": [
+                {"type":"web_search_preview"},
+                {
+                    "type":"function",
+                    "function": {
+                        "name": "search_web",
+                        "description": "Search the web",
+                        "parameters": {"type":"object"}
+                    }
+                }
+            ]
+        }))
+        .unwrap();
+
+        assert_eq!(request.tools.len(), 1);
+        assert_eq!(request.tools[0].name, "search_web");
+    }
 }
 
 pub fn response(
@@ -214,6 +250,13 @@ pub(crate) fn parse_tools(value: Option<&Value>) -> Vec<ToolDefinition> {
         .into_iter()
         .flatten()
         .filter_map(|tool| {
+            if tool
+                .get("type")
+                .and_then(Value::as_str)
+                .is_some_and(is_hosted_tool_type)
+            {
+                return None;
+            }
             let function = tool.get("function").unwrap_or(tool);
             let name = function.get("name")?.as_str()?.to_string();
             Some(ToolDefinition {
@@ -230,6 +273,53 @@ pub(crate) fn parse_tools(value: Option<&Value>) -> Vec<ToolDefinition> {
             })
         })
         .collect()
+}
+
+pub(crate) fn reject_hosted_only_tools(
+    value: Option<&Value>,
+    parsed_tools: &[ToolDefinition],
+    tool_choice: &ToolChoice,
+) -> Result<(), AdapterError> {
+    if matches!(tool_choice, ToolChoice::None) || !parsed_tools.is_empty() {
+        return Ok(());
+    }
+    let hosted_tools = hosted_tool_types(value);
+    if hosted_tools.is_empty() {
+        return Ok(());
+    }
+    Err(AdapterError::InvalidRequest(format!(
+        "request includes hosted/server-side tools ({}) but no client-executed function tools. This adapter cannot drive Codex built-in browser/search or OpenAI hosted tools; use the native OpenAI Responses API for those tools, or expose search/browser as type:function tools executed by the client runtime.",
+        hosted_tools.join(", ")
+    )))
+}
+
+fn hosted_tool_types(value: Option<&Value>) -> Vec<String> {
+    let mut tools = value
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|tool| tool.get("type").and_then(Value::as_str))
+        .filter(|tool_type| is_hosted_tool_type(tool_type))
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    tools.sort();
+    tools.dedup();
+    tools
+}
+
+fn is_hosted_tool_type(tool_type: &str) -> bool {
+    matches!(
+        tool_type,
+        "web_search_preview"
+            | "web_search"
+            | "file_search"
+            | "code_interpreter"
+            | "image_generation"
+            | "computer_use_preview"
+            | "computer_use"
+            | "mcp"
+            | "custom"
+    )
 }
 
 pub(crate) fn parse_tool_choice(value: Option<&Value>) -> ToolChoice {

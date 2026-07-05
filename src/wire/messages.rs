@@ -23,8 +23,9 @@ pub fn parse_request(payload: Value) -> Result<UnifiedRequest, AdapterError> {
         .get("system")
         .and_then(Value::as_str)
         .map(ToOwned::to_owned);
-    let tools = chat::parse_tools(payload.get("tools"));
     let tool_choice = chat::parse_tool_choice(payload.get("tool_choice"));
+    let tools = chat::parse_tools(payload.get("tools"));
+    chat::reject_hosted_only_tools(payload.get("tools"), &tools, &tool_choice)?;
     let parallel_tool_calls = payload
         .get("parallel_tool_calls")
         .and_then(Value::as_bool)

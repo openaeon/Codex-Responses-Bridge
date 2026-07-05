@@ -74,6 +74,21 @@ Codex / runtime 负责真正执行工具
 | 流式交互 | 输出被整理成 Codex 可消费事件 | bridge |
 | 结构化输出 | JSON 输出可被提取和校验 | bridge |
 
+## Codex 内置浏览器和搜索边界
+
+官方原生 Responses API 能使用 `web_search`、`web_search_preview`、`file_search`、`code_interpreter`、`computer_use`、MCP hosted tools 等服务端工具，是因为 OpenAI 服务端拥有对应的执行环境。
+
+当前 bridge 没有这个服务端环境，也不会伪造这些工具结果。因此：
+
+| 场景 | 当前结果 |
+| --- | --- |
+| Codex 通过官方原生 API 使用内置浏览器或搜索 | 可以，由官方服务端执行 |
+| 请求里只有 `web_search_preview` / `web_search` 等 hosted tools | bridge 会返回明确错误，不再静默忽略 |
+| 本地模型想搜索或操作浏览器 | 需要客户端/runtime 提供 `type:"function"` 工具，例如 `search_web`、`browser_open`、`browser_click` |
+| DeepSeek Web 内部联网搜索 | 属于 DeepSeek Web provider 自己的上游能力，不等同于 Codex 内置浏览器 |
+
+所以这条链路不能理解成“本地模型自动拥有 Codex 官方浏览器”。它只能调用客户端明确暴露、并由客户端真实执行的 function tools。
+
 ## 快速开始
 
 ### 启动默认本地上游
@@ -300,7 +315,7 @@ docs/
 | `prompt_cache_key` / `prompt_cache_retention` | 有真实返回时保留，不自行伪造缓存效果 |
 | `metadata` / `client_metadata` | 不破坏本地 response 语义时透传 |
 | response `id` / `status` / `output` | 使用 bridge 本地状态，不让上游覆盖 |
-| hosted tools / encrypted reasoning | 没有真实来源时不伪造 |
+| hosted tools / encrypted reasoning | 没有真实来源时不伪造；Codex 内置浏览器/官方搜索需要原生 API 或显式 function tool 映射 |
 
 ## 适合和不适合
 
